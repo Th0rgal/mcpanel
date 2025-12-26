@@ -152,48 +152,44 @@ struct AnyCodable: Codable {
 
 // MARK: - Tool Call Wrapper
 
-enum ToolUIContent: Identifiable {
-    case dataTable(ToolUIDataTable)
-    case optionList(ToolUIOptionList)
-    case unknown(name: String, args: String)
-    
-    var id: String {
-        switch self {
-        case .dataTable(let table):
-            return table.id ?? UUID().uuidString
-        case .optionList(let list):
-            return list.id ?? UUID().uuidString
-        case .unknown(let name, _):
-            return "unknown-\(name)"
-        }
+struct ToolUIContent: Identifiable {
+    let id: String
+    let content: ContentType
+
+    enum ContentType {
+        case dataTable(ToolUIDataTable)
+        case optionList(ToolUIOptionList)
+        case unknown(name: String, args: String)
     }
-    
+
     static func parse(name: String, args: [String: Any]) -> ToolUIContent? {
         guard let data = try? JSONSerialization.data(withJSONObject: args) else {
             return nil
         }
-        
+
         let decoder = JSONDecoder()
-        
+
         switch name {
         case "ui_dataTable":
             if let table = try? decoder.decode(ToolUIDataTable.self, from: data) {
-                return .dataTable(table)
+                let stableId = table.id ?? UUID().uuidString
+                return ToolUIContent(id: stableId, content: .dataTable(table))
             }
         case "ui_optionList":
             if let list = try? decoder.decode(ToolUIOptionList.self, from: data) {
-                return .optionList(list)
+                let stableId = list.id ?? UUID().uuidString
+                return ToolUIContent(id: stableId, content: .optionList(list))
             }
         default:
             break
         }
-        
+
         // Return unknown for any unrecognized UI tool
         if name.hasPrefix("ui_") {
             let argsString = String(data: data, encoding: .utf8) ?? "{}"
-            return .unknown(name: name, args: argsString)
+            return ToolUIContent(id: "unknown-\(name)", content: .unknown(name: name, args: argsString))
         }
-        
+
         return nil
     }
 }

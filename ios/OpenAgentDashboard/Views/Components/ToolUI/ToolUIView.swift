@@ -40,24 +40,24 @@ struct ToolUIView: View {
     
     @ViewBuilder
     private var toolContent: some View {
-        switch content {
+        switch content.content {
         case .dataTable(let table):
             ToolUIDataTableView(table: table)
-            
+
         case .optionList(let list):
             ToolUIOptionListView(optionList: list) { optionId in
                 if let listId = list.id {
                     onOptionSelect?(listId, optionId)
                 }
             }
-            
+
         case .unknown(let name, let args):
             unknownToolView(name: name, args: args)
         }
     }
-    
+
     private var toolIcon: String {
-        switch content {
+        switch content.content {
         case .dataTable:
             return "tablecells"
         case .optionList:
@@ -66,9 +66,9 @@ struct ToolUIView: View {
             return "questionmark.circle"
         }
     }
-    
+
     private var toolName: String {
-        switch content {
+        switch content.content {
         case .dataTable:
             return "ui_dataTable"
         case .optionList:

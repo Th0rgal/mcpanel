@@ -2,7 +2,7 @@ import Foundation
 import CoreGraphics
 import ImageIO
 
-let owner = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "OfflineCinema"
+let owner = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "MCPanel"
 let out = CommandLine.arguments.count > 2 ? CommandLine.arguments[2] : "window.png"
 
 let options = CGWindowListOption(arrayLiteral: .optionOnScreenOnly, .excludeDesktopElements)
