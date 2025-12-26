@@ -64,6 +64,10 @@ struct ServerDetailView: View {
             FileBrowserView()
                 .environmentObject(serverManager)
                 .padding(.top, 12)
+        case .properties:
+            ServerPropertiesView(server: server)
+                .environmentObject(serverManager)
+                .padding(.top, 12)
         case .settings:
             ServerSettingsView(server: server)
                 .environmentObject(serverManager)

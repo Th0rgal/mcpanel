@@ -22,6 +22,7 @@ enum DetailTab: String, CaseIterable, Identifiable {
     case console = "Console"
     case plugins = "Plugins"
     case files = "Files"
+    case properties = "Properties"
     case settings = "Settings"
 
     var id: String { rawValue }
@@ -31,6 +32,7 @@ enum DetailTab: String, CaseIterable, Identifiable {
         case .console: return "terminal.fill"
         case .plugins: return "puzzlepiece.extension.fill"
         case .files: return "folder.fill"
+        case .properties: return "doc.text.fill"
         case .settings: return "gearshape.fill"
         }
     }
