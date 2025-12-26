@@ -1,0 +1,548 @@
+---
+description: MCPanel design philosophy, patterns, and macOS native app best practices for Minecraft server management
+globs: ["**/*.swift", "**/Info.plist", "**/*.entitlements"]
+alwaysApply: true
+---
+
+# MCPanel Style Guide
+
+## Design Philosophy
+
+MCPanel is a **native macOS application** for managing remote Minecraft servers. The design is inspired by the **Books app** on macOS Sequoia/Tahoe, with its elegant floating glass sidebar, clean typography, and seamless integration with the system's visual language.
+
+### Core Principles
+
+1. **Native First** — Use system APIs, materials, and behaviors. Avoid custom implementations when Apple provides native solutions.
+
+2. **Liquid Glass Aesthetic** — Embrace macOS's "Liquid Glass" design language with translucent materials that sample the desktop wallpaper and adapt to light/dark mode.
+
+3. **Minimalism with Purpose** — Show only what's necessary. Server status at a glance, details on demand.
+
+4. **Real-time Feedback** — Live console output, instant status updates, responsive controls.
+
+5. **Secure by Default** — SSH keys over passwords, credentials in Keychain, no plaintext secrets.
+
+---
+
+## Visual Design
+
+### Color Palette
+
+```swift
+// Window background (deep charcoal gradient)
+LinearGradient(colors: [Color(hex: "17171A"), Color(hex: "121214")], ...)
+
+// Detail panel (slightly lighter for depth)
+Color(hex: "161618")
+
+// Sidebar glass base (semi-transparent)
+Color(hex: "1D1D1F").opacity(0.65)
+
+// Status colors
+Color.green     // Server online
+Color.red       // Server offline
+Color.yellow    // Server starting/stopping
+Color.orange    // Warning/attention needed
+
+// Console colors
+Color(hex: "0D0D0F")  // Console background
+Color.white           // Normal output
+Color.yellow          // Warnings
+Color.red             // Errors
+Color.cyan            // Player join/leave
+Color.green           // Plugin messages
+
+// Text: primary = .primary, secondary = .primary.opacity(0.6-0.85)
+// Accent: system accent color (respects user preference)
+```
+
+### Typography
+
+- **Section headers**: 13pt semibold, white
+- **List items**: 13pt regular, primary
+- **Icons**: SF Symbols, 16pt
+- **Server names**: 24pt bold
+- **Console output**: SF Mono, 12pt
+- **Plugin names**: 13pt medium
+
+### Spacing & Layout
+
+| Element | Value |
+|---------|-------|
+| Outer inset (sidebar from window edge) | 10pt |
+| Sidebar width | 220pt |
+| Gap between sidebar and content | 12pt |
+| Corner radius (sidebar, panels) | 12pt |
+| Titlebar spacer (traffic lights clearance) | 52pt |
+| Console line height | 18pt |
+
+---
+
+## Floating Glass Sidebar
+
+The sidebar is a **floating translucent panel** that sits inside the window bounds, under the titlebar, with concentric rounded corners.
+
+### Implementation
+
+```swift
+// Window configuration (AppDelegate)
+window.titlebarAppearsTransparent = true
+window.titleVisibility = .hidden
+window.toolbar = nil  // Critical: prevents glassy titlebar
+window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+window.isMovableByWindowBackground = true
+
+// WindowGroup scene
+.windowStyle(.hiddenTitleBar)  // NOT .automatic
+// Do NOT use .windowToolbarStyle() — it creates the glass bar
+```
+
+### Sidebar Glass Effect
+
+```swift
+ZStack {
+    // Dark base layer for depth
+    RoundedRectangle(cornerRadius: 12, style: .continuous)
+        .fill(Color(hex: "1D1D1F").opacity(0.65))
+
+    // System glass material (samples wallpaper)
+    GlassBackground(material: .sidebar, blendingMode: .withinWindow)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+}
+.shadow(color: .black.opacity(0.45), radius: 28, x: 0, y: 14)
+```
+
+---
+
+## Server List Sidebar
+
+### Server Item Design
+
+```swift
+HStack(spacing: 12) {
+    // Status indicator (colored circle)
+    Circle()
+        .fill(server.isOnline ? .green : .red)
+        .frame(width: 8, height: 8)
+
+    VStack(alignment: .leading, spacing: 2) {
+        Text(server.name)
+            .font(.system(size: 13, weight: .medium))
+        Text(server.host)
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+    }
+
+    Spacer()
+
+    // Player count (if online)
+    if server.isOnline, let players = server.playerCount {
+        Text("\(players)")
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(.secondary)
+    }
+}
+```
+
+### Server Status Icons
+
+Use SF Symbols:
+- `circle.fill` — Status indicator
+- `server.rack` — Server icon
+- `arrow.clockwise` — Restart
+- `stop.fill` — Stop
+- `play.fill` — Start
+- `terminal.fill` — Console
+- `puzzlepiece.extension.fill` — Plugins
+- `folder.fill` — File browser
+- `arrow.down.circle` — Download/update
+
+---
+
+## Console View
+
+### Live Console Implementation
+
+```swift
+ScrollViewReader { proxy in
+    ScrollView {
+        LazyVStack(alignment: .leading, spacing: 2) {
+            ForEach(consoleMessages) { message in
+                ConsoleLineView(message: message)
+                    .id(message.id)
+            }
+        }
+        .padding(12)
+    }
+    .background(Color(hex: "0D0D0F"))
+    .onChange(of: consoleMessages.count) { _, _ in
+        // Auto-scroll to bottom
+        if let last = consoleMessages.last {
+            proxy.scrollTo(last.id, anchor: .bottom)
+        }
+    }
+}
+```
+
+### Console Message Coloring
+
+```swift
+func colorForMessage(_ message: ConsoleMessage) -> Color {
+    switch message.level {
+    case .info: return .white
+    case .warn: return .yellow
+    case .error: return .red
+    case .player: return .cyan
+    case .plugin: return .green
+    }
+}
+```
+
+### Command Input
+
+```swift
+HStack(spacing: 8) {
+    Text(">")
+        .font(.system(size: 12, design: .monospaced))
+        .foregroundStyle(.green)
+
+    TextField("Enter command...", text: $commandText)
+        .font(.system(size: 12, design: .monospaced))
+        .textFieldStyle(.plain)
+        .onSubmit { sendCommand() }
+}
+.padding(8)
+.background(Color(hex: "1A1A1C"))
+.cornerRadius(6)
+```
+
+---
+
+## Plugin Management
+
+### Plugin List Item
+
+```swift
+HStack(spacing: 12) {
+    // Plugin icon
+    Image(systemName: "puzzlepiece.extension.fill")
+        .foregroundStyle(plugin.isEnabled ? .green : .gray)
+
+    VStack(alignment: .leading, spacing: 2) {
+        Text(plugin.name)
+            .font(.system(size: 13, weight: .medium))
+            .strikethrough(!plugin.isEnabled, color: .gray)
+
+        if let version = plugin.version {
+            Text("v\(version)")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    Spacer()
+
+    Toggle("", isOn: $plugin.isEnabled)
+        .toggleStyle(.switch)
+        .controlSize(.small)
+}
+```
+
+### Enable/Disable Logic
+
+```swift
+// To disable: rename plugin.jar → plugin.jar.disabled
+// To enable: rename plugin.jar.disabled → plugin.jar
+func togglePlugin(_ plugin: Plugin) async throws {
+    let currentPath = plugin.path
+    let newPath: String
+
+    if plugin.isEnabled {
+        newPath = currentPath + ".disabled"
+    } else {
+        newPath = String(currentPath.dropLast(".disabled".count))
+    }
+
+    try await sshService.rename(from: currentPath, to: newPath)
+}
+```
+
+---
+
+## File Browser
+
+### Native macOS-Style File List
+
+```swift
+List(files, selection: $selectedFile) { file in
+    HStack(spacing: 10) {
+        Image(systemName: file.isDirectory ? "folder.fill" : iconForFile(file))
+            .foregroundStyle(file.isDirectory ? .blue : .secondary)
+
+        Text(file.name)
+            .font(.system(size: 13))
+
+        Spacer()
+
+        if !file.isDirectory {
+            Text(formatFileSize(file.size))
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+.contextMenu { ... }  // Right-click: Download, Delete, Rename
+```
+
+### Drag and Drop Upload
+
+```swift
+.onDrop(of: [.fileURL], isTargeted: $isDragOver) { providers in
+    for provider in providers {
+        provider.loadObject(ofClass: URL.self) { url, error in
+            guard let url = url else { return }
+            Task {
+                try await fileTransferService.upload(
+                    localURL: url,
+                    remotePath: currentPath + "/" + url.lastPathComponent
+                )
+            }
+        }
+    }
+    return true
+}
+```
+
+---
+
+## SSH & RCON Services
+
+### SSH Connection Pattern
+
+```swift
+actor SSHService {
+    private var connection: SSHConnection?
+
+    func connect(to server: Server) async throws {
+        let auth: SSHAuthentication
+        switch server.authMethod {
+        case .password:
+            let password = try KeychainService.getPassword(for: server.id)
+            auth = .password(server.sshUsername, password)
+        case .key(let path):
+            auth = .publicKey(server.sshUsername, path)
+        }
+
+        connection = try await SSHConnection.connect(
+            host: server.host,
+            port: server.sshPort,
+            authentication: auth
+        )
+    }
+
+    func execute(_ command: String) async throws -> String {
+        guard let connection else { throw SSHError.notConnected }
+        return try await connection.execute(command)
+    }
+
+    func tailLog(path: String) -> AsyncStream<String> {
+        // Stream output from: tail -f /path/to/latest.log
+    }
+}
+```
+
+### RCON Protocol
+
+```swift
+struct RCONPacket {
+    let requestID: Int32
+    let type: PacketType
+    let payload: String
+
+    enum PacketType: Int32 {
+        case login = 3
+        case command = 2
+        case response = 0
+    }
+
+    func encode() -> Data {
+        var data = Data()
+        let payloadData = payload.data(using: .utf8)!
+        let length = Int32(10 + payloadData.count)
+
+        data.append(contentsOf: withUnsafeBytes(of: length.littleEndian) { Array($0) })
+        data.append(contentsOf: withUnsafeBytes(of: requestID.littleEndian) { Array($0) })
+        data.append(contentsOf: withUnsafeBytes(of: type.rawValue.littleEndian) { Array($0) })
+        data.append(payloadData)
+        data.append(contentsOf: [0, 0])  // Null terminator + padding
+
+        return data
+    }
+}
+```
+
+---
+
+## Version Manager
+
+### Fetching Available Versions
+
+```swift
+struct MCJarService {
+    let baseURL = URL(string: "https://mcjarfiles.com/api")!
+
+    func getVersions(type: ServerType) async throws -> [ServerVersion] {
+        let (variant, category) = type.apiParams
+        let url = baseURL.appendingPathComponent("get-versions/\(category)/\(variant)")
+
+        let (data, _) = try await URLSession.shared.data(from: url)
+        return try JSONDecoder().decode([ServerVersion].self, from: data)
+    }
+
+    func downloadJar(type: ServerType, version: String) async throws -> URL {
+        let (variant, category) = type.apiParams
+        let url = baseURL.appendingPathComponent("get-jar/\(category)/\(variant)/\(version)")
+
+        let (tempURL, _) = try await URLSession.shared.download(from: url)
+        return tempURL
+    }
+}
+
+enum ServerType {
+    case vanilla, paper, purpur, fabric, forge, velocity
+
+    var apiParams: (variant: String, category: String) {
+        switch self {
+        case .vanilla: return ("release", "vanilla")
+        case .paper: return ("paper", "servers")
+        case .purpur: return ("purpur", "servers")
+        case .fabric: return ("fabric", "modded")
+        case .forge: return ("forge", "modded")
+        case .velocity: return ("velocity", "proxies")
+        }
+    }
+}
+```
+
+---
+
+## Keychain Integration
+
+```swift
+struct KeychainService {
+    static func savePassword(_ password: String, for serverID: UUID) throws {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: serverID.uuidString,
+            kSecAttrService as String: "com.mcpanel.server-credentials",
+            kSecValueData as String: password.data(using: .utf8)!
+        ]
+
+        SecItemDelete(query as CFDictionary)  // Remove existing
+        let status = SecItemAdd(query as CFDictionary, nil)
+        guard status == errSecSuccess else {
+            throw KeychainError.saveFailed(status)
+        }
+    }
+
+    static func getPassword(for serverID: UUID) throws -> String {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: serverID.uuidString,
+            kSecAttrService as String: "com.mcpanel.server-credentials",
+            kSecReturnData as String: true
+        ]
+
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+
+        guard status == errSecSuccess,
+              let data = result as? Data,
+              let password = String(data: data, encoding: .utf8) else {
+            throw KeychainError.notFound
+        }
+
+        return password
+    }
+}
+```
+
+---
+
+## Info.plist Configuration
+
+| Key | Value | Purpose |
+|-----|-------|---------|
+| `CFBundleIconFile` | `AppIcon` | App icon |
+| `LSApplicationCategoryType` | `public.app-category.developer-tools` | App Store category |
+| `NSHighResolutionCapable` | `true` | Retina support |
+| `NSRequiresAquaSystemAppearance` | `false` | Automatic dark mode |
+| `NSHumanReadableCopyright` | Copyright info | About dialog |
+| `NSSupportsAutomaticTermination` | `false` | Keep alive for connections |
+
+### Entitlements (Sandbox)
+
+```xml
+<key>com.apple.security.app-sandbox</key><true/>
+<key>com.apple.security.network.client</key><true/>
+<key>com.apple.security.files.user-selected.read-write</key><true/>
+<key>com.apple.security.files.downloads.read-write</key><true/>
+<key>keychain-access-groups</key>
+<array><string>$(AppIdentifierPrefix)com.mcpanel</string></array>
+```
+
+---
+
+## File Structure
+
+```
+MCPanel/
+├── MCPanelApp.swift            # App entry, window config, traffic lights
+├── Models/
+│   ├── Server.swift            # Server connection model
+│   ├── Plugin.swift            # Plugin model
+│   ├── ServerConfig.swift      # Configuration persistence
+│   └── ConsoleMessage.swift    # Console log entry
+├── Services/
+│   ├── ServerManager.swift     # Central state manager
+│   ├── SSHService.swift        # SSH connection/commands
+│   ├── RCONService.swift       # RCON protocol
+│   ├── FileTransferService.swift # SFTP operations
+│   ├── MCJarService.swift      # mcjarfiles.com API
+│   ├── KeychainService.swift   # Secure credential storage
+│   └── PersistenceService.swift # JSON config save/load
+├── Views/
+│   ├── ContentView.swift       # Main layout
+│   ├── SidebarView.swift       # Server list
+│   ├── ServerDetailView.swift  # Server controls
+│   ├── ConsoleView.swift       # Live console
+│   ├── PluginsView.swift       # Plugin management
+│   ├── FileBrowserView.swift   # File explorer
+│   ├── ServerConfigView.swift  # Settings sheet
+│   ├── VersionManagerView.swift # JAR downloads
+│   └── Components/
+│       ├── GlassBackground.swift
+│       ├── StatusIndicator.swift
+│       └── ServerControlBar.swift
+└── Assets.xcassets/
+```
+
+---
+
+## Testing Checklist
+
+Before shipping, verify:
+
+- [ ] SSH connection works with password auth
+- [ ] SSH connection works with key-based auth
+- [ ] RCON commands execute correctly
+- [ ] Console streams log output in real-time
+- [ ] Plugin enable/disable works (file rename)
+- [ ] File browser navigates correctly
+- [ ] Drag-and-drop file upload works
+- [ ] Server JAR download from mcjarfiles.com works
+- [ ] Credentials stored securely in Keychain
+- [ ] Multiple servers can be managed simultaneously
+- [ ] App respects dark/light mode
+- [ ] Traffic lights position correctly after window resize
+- [ ] No connection leaks on server disconnect

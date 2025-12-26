@@ -1,0 +1,314 @@
+#!/bin/bash
+# MCPanel CLI - Command-line interface for MCPanel server management
+
+set -e
+
+# Configuration
+CONFIG_FILE="$HOME/Library/Application Support/MCPanel/servers.json"
+SECRETS_FILE="${MCPANEL_SECRETS:-$HOME/.mcpanel-secrets.json}"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+
+# Check for jq
+if ! command -v jq &> /dev/null; then
+    echo -e "${RED}Error: jq is required. Install with: brew install jq${NC}"
+    exit 1
+fi
+
+# Load server config
+load_server() {
+    local server_name="${1:-}"
+
+    if [[ -f "$CONFIG_FILE" ]]; then
+        if [[ -z "$server_name" ]]; then
+            # Get first server
+            jq -r '.[0]' "$CONFIG_FILE"
+        else
+            # Find by name
+            jq -r ".[] | select(.name == \"$server_name\")" "$CONFIG_FILE"
+        fi
+    else
+        echo -e "${RED}No servers configured. Run MCPanel app to add servers.${NC}"
+        exit 1
+    fi
+}
+
+# Get SSH command for server
+get_ssh_cmd() {
+    local server_json="$1"
+    local host=$(echo "$server_json" | jq -r '.host')
+    local port=$(echo "$server_json" | jq -r '.sshPort')
+    local user=$(echo "$server_json" | jq -r '.sshUsername')
+    local identity=$(echo "$server_json" | jq -r '.identityFilePath' | sed "s|~|$HOME|g")
+
+    local ssh_cmd="ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no"
+
+    if [[ "$identity" != "null" && -n "$identity" ]]; then
+        ssh_cmd="$ssh_cmd -i $identity"
+    fi
+
+    if [[ "$port" != "22" ]]; then
+        ssh_cmd="$ssh_cmd -p $port"
+    fi
+
+    echo "$ssh_cmd $user@$host"
+}
+
+# Commands
+cmd_status() {
+    local server=$(load_server "$1")
+    local name=$(echo "$server" | jq -r '.name')
+    local host=$(echo "$server" | jq -r '.host')
+    local unit=$(echo "$server" | jq -r '.systemdUnit')
+    local ssh_cmd=$(get_ssh_cmd "$server")
+
+    echo -e "${BLUE}Server:${NC} $name ($host)"
+    echo -e "${BLUE}Systemd Unit:${NC} $unit"
+    echo ""
+
+    if $ssh_cmd "systemctl is-active '$unit'" 2>/dev/null | grep -q "active"; then
+        echo -e "${GREEN}● Server is ONLINE${NC}"
+        echo ""
+        $ssh_cmd "systemctl status '$unit' --no-pager" 2>/dev/null | head -15
+    else
+        echo -e "${RED}● Server is OFFLINE${NC}"
+    fi
+}
+
+cmd_start() {
+    local server=$(load_server "$1")
+    local name=$(echo "$server" | jq -r '.name')
+    local unit=$(echo "$server" | jq -r '.systemdUnit')
+    local ssh_cmd=$(get_ssh_cmd "$server")
+
+    echo -e "${YELLOW}Starting $name...${NC}"
+    $ssh_cmd "systemctl start '$unit'"
+    sleep 2
+    cmd_status "$1"
+}
+
+cmd_stop() {
+    local server=$(load_server "$1")
+    local name=$(echo "$server" | jq -r '.name')
+    local unit=$(echo "$server" | jq -r '.systemdUnit')
+    local ssh_cmd=$(get_ssh_cmd "$server")
+
+    echo -e "${YELLOW}Stopping $name...${NC}"
+    $ssh_cmd "systemctl stop '$unit'"
+    sleep 2
+    cmd_status "$1"
+}
+
+cmd_restart() {
+    local server=$(load_server "$1")
+    local name=$(echo "$server" | jq -r '.name')
+    local unit=$(echo "$server" | jq -r '.systemdUnit')
+    local ssh_cmd=$(get_ssh_cmd "$server")
+
+    echo -e "${YELLOW}Restarting $name...${NC}"
+    $ssh_cmd "systemctl restart '$unit'"
+    sleep 3
+    cmd_status "$1"
+}
+
+cmd_logs() {
+    local server_or_lines="$1"
+    local lines_arg="$2"
+    local server_name=""
+    local lines="50"
+
+    # Check if first arg is a number (lines) or server name
+    if [[ "$server_or_lines" =~ ^[0-9]+$ ]]; then
+        lines="$server_or_lines"
+    elif [[ -n "$server_or_lines" ]]; then
+        server_name="$server_or_lines"
+        if [[ -n "$lines_arg" ]]; then
+            lines="$lines_arg"
+        fi
+    fi
+
+    local server=$(load_server "$server_name")
+    local path=$(echo "$server" | jq -r '.serverPath')
+    local ssh_cmd=$(get_ssh_cmd "$server")
+
+    echo -e "${BLUE}Last $lines log lines:${NC}"
+    echo ""
+    $ssh_cmd "tail -n $lines '$path/logs/latest.log'"
+}
+
+cmd_logs_follow() {
+    local server=$(load_server "$1")
+    local path=$(echo "$server" | jq -r '.serverPath')
+    local ssh_cmd=$(get_ssh_cmd "$server")
+
+    echo -e "${BLUE}Following server log (Ctrl+C to stop)...${NC}"
+    echo ""
+    $ssh_cmd "tail -f '$path/logs/latest.log'"
+}
+
+cmd_plugins() {
+    local server=$(load_server "$1")
+    local plugins_path=$(echo "$server" | jq -r '.pluginsPath // (.serverPath + "/plugins")')
+    local ssh_cmd=$(get_ssh_cmd "$server")
+
+    echo -e "${BLUE}Plugins:${NC}"
+    echo ""
+
+    # List enabled plugins
+    echo -e "${GREEN}Enabled:${NC}"
+    $ssh_cmd "ls '$plugins_path'/*.jar 2>/dev/null" | while read jar; do
+        name=$(basename "$jar" .jar)
+        echo "  ✓ $name"
+    done
+
+    echo ""
+
+    # List disabled plugins
+    echo -e "${YELLOW}Disabled:${NC}"
+    $ssh_cmd "ls '$plugins_path'/*.jar.disabled 2>/dev/null" | while read jar; do
+        name=$(basename "$jar" .jar.disabled)
+        echo "  ✗ $name"
+    done
+}
+
+cmd_plugin_enable() {
+    local plugin_name="$2"
+    if [[ -z "$plugin_name" ]]; then
+        echo -e "${RED}Usage: mcpanel-cli plugin-enable <plugin-name>${NC}"
+        exit 1
+    fi
+
+    local server=$(load_server "$1")
+    local plugins_path=$(echo "$server" | jq -r '.pluginsPath // (.serverPath + "/plugins")')
+    local ssh_cmd=$(get_ssh_cmd "$server")
+
+    echo -e "${YELLOW}Enabling plugin: $plugin_name${NC}"
+
+    # Find the disabled plugin
+    local disabled_jar=$($ssh_cmd "ls '$plugins_path'/*${plugin_name}*.jar.disabled 2>/dev/null | head -1")
+
+    if [[ -z "$disabled_jar" ]]; then
+        echo -e "${RED}Plugin not found or already enabled${NC}"
+        exit 1
+    fi
+
+    local enabled_jar="${disabled_jar%.disabled}"
+    $ssh_cmd "mv '$disabled_jar' '$enabled_jar'"
+    echo -e "${GREEN}Enabled: $(basename "$enabled_jar")${NC}"
+    echo -e "${YELLOW}Restart the server for changes to take effect${NC}"
+}
+
+cmd_plugin_disable() {
+    local plugin_name="$2"
+    if [[ -z "$plugin_name" ]]; then
+        echo -e "${RED}Usage: mcpanel-cli plugin-disable <plugin-name>${NC}"
+        exit 1
+    fi
+
+    local server=$(load_server "$1")
+    local plugins_path=$(echo "$server" | jq -r '.pluginsPath // (.serverPath + "/plugins")')
+    local ssh_cmd=$(get_ssh_cmd "$server")
+
+    echo -e "${YELLOW}Disabling plugin: $plugin_name${NC}"
+
+    # Find the enabled plugin (exclude already disabled ones)
+    local enabled_jar=$($ssh_cmd "ls '$plugins_path'/*${plugin_name}*.jar 2>/dev/null | grep -v '.disabled' | head -1")
+
+    if [[ -z "$enabled_jar" ]]; then
+        echo -e "${RED}Plugin not found or already disabled${NC}"
+        exit 1
+    fi
+
+    local disabled_jar="${enabled_jar}.disabled"
+    $ssh_cmd "mv '$enabled_jar' '$disabled_jar'"
+    echo -e "${GREEN}Disabled: $(basename "$enabled_jar")${NC}"
+    echo -e "${YELLOW}Restart the server for changes to take effect${NC}"
+}
+
+cmd_files() {
+    local server=$(load_server "$1")
+    local path="${2:-$(echo "$server" | jq -r '.serverPath')}"
+    local ssh_cmd=$(get_ssh_cmd "$server")
+
+    echo -e "${BLUE}Files in $path:${NC}"
+    echo ""
+    $ssh_cmd "ls -la '$path'"
+}
+
+cmd_exec() {
+    local server=$(load_server "$1")
+    shift
+    local remote_cmd="$@"
+    local ssh_cmd=$(get_ssh_cmd "$server")
+
+    $ssh_cmd "$remote_cmd"
+}
+
+cmd_list() {
+    echo -e "${BLUE}Configured Servers:${NC}"
+    echo ""
+
+    if [[ -f "$CONFIG_FILE" ]]; then
+        jq -r '.[] | "  \(.name) - \(.host) (\(.serverType // "unknown"))"' "$CONFIG_FILE"
+    else
+        echo "  No servers configured"
+    fi
+}
+
+cmd_help() {
+    echo "MCPanel CLI - Minecraft Server Management"
+    echo ""
+    echo "Usage: mcpanel-cli <command> [server-name] [args...]"
+    echo ""
+    echo "Commands:"
+    echo "  status [server]              Show server status"
+    echo "  start [server]               Start the server"
+    echo "  stop [server]                Stop the server"
+    echo "  restart [server]             Restart the server"
+    echo "  logs [server] [lines]        Show last N log lines (default: 50)"
+    echo "  logs-follow [server]         Follow server log in real-time"
+    echo "  plugins [server]             List all plugins"
+    echo "  plugin-enable [server] NAME  Enable a disabled plugin"
+    echo "  plugin-disable [server] NAME Disable an enabled plugin"
+    echo "  files [server] [path]        List files in directory"
+    echo "  exec [server] <command>      Execute remote command"
+    echo "  list                         List all configured servers"
+    echo "  help                         Show this help"
+    echo ""
+    echo "If server name is omitted, the first configured server is used."
+    echo ""
+    echo "Examples:"
+    echo "  mcpanel-cli status"
+    echo "  mcpanel-cli restart \"Test Server\""
+    echo "  mcpanel-cli plugin-disable SkinMotion"
+    echo "  mcpanel-cli logs-follow"
+}
+
+# Main
+case "${1:-help}" in
+    status)      cmd_status "$2" ;;
+    start)       cmd_start "$2" ;;
+    stop)        cmd_stop "$2" ;;
+    restart)     cmd_restart "$2" ;;
+    logs)        cmd_logs "$2" "$3" ;;
+    logs-follow) cmd_logs_follow "$2" ;;
+    plugins)     cmd_plugins "$2" ;;
+    plugin-enable)  cmd_plugin_enable "$2" "$3" ;;
+    plugin-disable) cmd_plugin_disable "$2" "$3" ;;
+    files)       cmd_files "$2" "$3" ;;
+    exec)        shift; cmd_exec "$@" ;;
+    list)        cmd_list ;;
+    help|--help|-h) cmd_help ;;
+    *)
+        echo -e "${RED}Unknown command: $1${NC}"
+        echo ""
+        cmd_help
+        exit 1
+        ;;
+esac

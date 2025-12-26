@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(swift build:*)",
+      "Bash(swift package:*)",
+      "Bash(swift test:*)",
+      "Bash(./build-app.sh)",
+      "Bash(./build.sh)",
+      "Bash(open MCPanel.app)",
+      "Bash(open *.xcodeproj)",
+      "Bash(xcodebuild:*)",
+      "Bash(pkill:*)",
+      "Bash(osascript:*)",
+      "Bash(ls:*)",
+      "Bash(mkdir:*)",
+      "Bash(rm -rf .build)",
+      "Bash(rm -rf MCPanel.app)",
+      "Bash(cp:*)",
+      "Bash(git:*)",
+      "Bash(curl:*)"
+    ],
+    "deny": []
+  }
+}

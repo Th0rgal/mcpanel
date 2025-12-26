@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Offline Cinema</string>
+    <key>CFBundleDisplayName</key>
+    <string>Offline Cinema</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.offlinecinema.app</string>
+    <key>CFBundleVersion</key>
+    <string>2</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleExecutable</key>
+    <string>OfflineCinema</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    
+    <!-- App Category for App Store / Launchpad -->
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.video</string>
+    
+    <!-- Retina / HiDPI support -->
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    
+    <!-- Dark Mode support (automatic) -->
+    <key>NSRequiresAquaSystemAppearance</key>
+    <false/>
+    
+    <!-- Copyright for About dialog -->
+    <key>NSHumanReadableCopyright</key>
+    <string>Copyright © 2024. All rights reserved.</string>
+    
+    <!-- Allow system to manage app lifecycle -->
+    <key>NSSupportsAutomaticTermination</key>
+    <true/>
+    <key>NSSupportsSuddenTermination</key>
+    <false/>
+    
+    <!-- Prevent display sleep during video playback -->
+    <key>NSAppSleepDisabled</key>
+    <false/>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Video</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.movie</string>
+                <string>public.mpeg-4</string>
+                <string>com.apple.quicktime-movie</string>
+                <string>public.avi</string>
+                <string>org.matroska.mkv</string>
+            </array>
+        </dict>
+    </array>
+    <key>NSContactsUsageDescription</key>
+    <string>Offline Cinema uses your contacts to display your profile picture.</string>
+    <key>UTImportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>org.matroska.mkv</string>
+            <key>UTTypeDescription</key>
+            <string>Matroska Video</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.movie</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>mkv</string>
+                </array>
+            </dict>
+        </dict>
+    </array>
+</dict>
+</plist>
+
