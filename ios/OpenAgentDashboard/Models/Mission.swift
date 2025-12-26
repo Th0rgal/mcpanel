@@ -42,32 +42,20 @@ enum MissionStatus: String, Codable, CaseIterable {
     }
 }
 
-struct MissionHistoryEntry: Codable, Identifiable {
-    let entryId: UUID
+struct MissionHistoryEntry: Codable, Identifiable, Hashable {
     let role: String
     let content: String
 
-    var id: UUID { entryId }
+    /// Stable identifier derived from content hash for consistent SwiftUI identity
+    var id: Int {
+        var hasher = Hasher()
+        hasher.combine(role)
+        hasher.combine(content)
+        return hasher.finalize()
+    }
 
     var isUser: Bool {
         role == "user"
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case role, content
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.entryId = UUID()
-        self.role = try container.decode(String.self, forKey: .role)
-        self.content = try container.decode(String.self, forKey: .content)
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(role, forKey: .role)
-        try container.encode(content, forKey: .content)
     }
 }
 

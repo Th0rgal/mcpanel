@@ -7,6 +7,7 @@
 
 import Foundation
 import Observation
+import Security
 
 @MainActor
 @Observable
@@ -19,10 +20,61 @@ final class APIService {
         get { UserDefaults.standard.string(forKey: "api_base_url") ?? "https://agent-backend.thomas.md" }
         set { UserDefaults.standard.set(newValue, forKey: "api_base_url") }
     }
-    
+
+    private static let jwtKeychainKey = "com.openagent.dashboard.jwt"
+
     private var jwtToken: String? {
-        get { UserDefaults.standard.string(forKey: "jwt_token") }
-        set { UserDefaults.standard.set(newValue, forKey: "jwt_token") }
+        get { Self.getKeychainItem(key: Self.jwtKeychainKey) }
+        set {
+            if let value = newValue {
+                Self.setKeychainItem(key: Self.jwtKeychainKey, value: value)
+            } else {
+                Self.deleteKeychainItem(key: Self.jwtKeychainKey)
+            }
+        }
+    }
+
+    // MARK: - Keychain Helpers
+
+    private static func getKeychainItem(key: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: key,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+
+        guard status == errSecSuccess, let data = result as? Data else {
+            return nil
+        }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func setKeychainItem(key: String, value: String) {
+        guard let data = value.data(using: .utf8) else { return }
+
+        // Delete existing item first
+        deleteKeychainItem(key: key)
+
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: key,
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+        ]
+
+        SecItemAdd(query as CFDictionary, nil)
+    }
+
+    private static func deleteKeychainItem(key: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: key
+        ]
+        SecItemDelete(query as CFDictionary)
     }
     
     var isAuthenticated: Bool {
@@ -203,9 +255,14 @@ final class APIService {
         let boundary = UUID().uuidString
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         
+        // Escape filename per RFC 2183: backslash-escape quotes and backslashes
+        let escapedFileName = fileName
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+
         var body = Data()
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(escapedFileName)\"\r\n".data(using: .utf8)!)
         body.append("Content-Type: application/octet-stream\r\n\r\n".data(using: .utf8)!)
         body.append(data)
         body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
@@ -283,19 +340,23 @@ final class APIService {
     
     private func parseSSEEvent(_ eventString: String, onEvent: @escaping (String, [String: Any]) -> Void) {
         var eventType = "message"
-        var dataString = ""
-        
+        var dataLines: [String] = []
+
         for line in eventString.split(separator: "\n", omittingEmptySubsequences: false) {
             let lineStr = String(line)
             if lineStr.hasPrefix("event:") {
                 eventType = String(lineStr.dropFirst(6)).trimmingCharacters(in: .whitespaces)
             } else if lineStr.hasPrefix("data:") {
-                dataString += String(lineStr.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+                // Per SSE spec, multiple data: lines are joined with newlines
+                dataLines.append(String(lineStr.dropFirst(5)).trimmingCharacters(in: .whitespaces))
             }
         }
-        
-        guard !dataString.isEmpty else { return }
-        
+
+        guard !dataLines.isEmpty else { return }
+
+        // Join multiple data lines with newlines per SSE specification
+        let dataString = dataLines.joined(separator: "\n")
+
         do {
             if let data = dataString.data(using: .utf8),
                let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
