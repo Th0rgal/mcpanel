@@ -226,8 +226,9 @@ actor PTYService {
         // User@host
         args.append("\(server.sshUsername)@\(server.host)")
 
-        // The remote command - wrap with TERM setting for screen compatibility
-        let wrappedCommand = "TERM=xterm-256color \(remoteCommand)"
+        // The remote command - wrap with TERM/COLORTERM settings for color support
+        // tmux with proper config supports truecolor, screen typically falls back to 16-color
+        let wrappedCommand = "TERM=xterm-256color COLORTERM=truecolor \(remoteCommand)"
         args.append(wrappedCommand)
 
         process.arguments = args

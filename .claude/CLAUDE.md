@@ -156,6 +156,58 @@ Server configurations stored in: `~/Library/Application Support/MCPanel/`
 
 SSH credentials stored in macOS Keychain.
 
+## Console Modes & Truecolor Support
+
+MCPanel supports multiple console connection modes:
+
+| Mode | Description | Truecolor Support |
+|------|-------------|-------------------|
+| **Tmux** | Attach to tmux session (recommended) | ✅ Full 24-bit RGB |
+| **Screen** | Attach to screen session | ⚠️ 16-color only |
+| **Direct** | Direct PTY shell | Depends on setup |
+| **Log Tail** | Traditional `tail -f` | N/A (no ANSI) |
+
+### Recommended Server Setup for Truecolor
+
+For full truecolor (24-bit RGB) console output with plugins like Oraxen, use **tmux** instead of screen:
+
+**1. Create `~/.tmux.conf` on the server:**
+```bash
+set -g default-terminal "tmux-256color"
+set -ga terminal-overrides ",*256col*:Tc"
+set -ga terminal-overrides ",xterm-256color:Tc"
+```
+
+**2. Create a systemd service using tmux:**
+```ini
+[Unit]
+Description=Minecraft Server
+After=network.target
+
+[Service]
+Type=forking
+User=minecraft
+WorkingDirectory=/path/to/server
+Environment=TERM=xterm-256color
+Environment=COLORTERM=truecolor
+ExecStart=/usr/bin/tmux new-session -d -s minecraft /usr/bin/java -Dnet.kyori.ansi.colorLevel=truecolor -Xms8G -Xmx12G -jar paper.jar --nogui
+ExecStop=/usr/bin/tmux send-keys -t minecraft "stop" Enter
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**3. Configure MCPanel** to use "Tmux" console mode in server settings.
+
+### Why Tmux?
+
+- **Screen** ignores `COLORTERM` and always uses 16-color mode regardless of configuration
+- **Tmux** with the `Tc` terminal override properly advertises truecolor support to Java/JLine
+- The `-Dnet.kyori.ansi.colorLevel=truecolor` JVM flag tells Adventure/Kyori ANSI to use 24-bit colors
+
 ## Server Connection Model
 
 ```swift
