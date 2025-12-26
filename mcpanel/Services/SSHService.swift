@@ -227,20 +227,61 @@ extension SSHService {
         _ = try await execute("systemctl start '\(unit)'")
     }
 
-    /// Stop the server
+    /// Stop the server gracefully by sending "stop" command to Minecraft console
     func stopServer() async throws {
+        // First, try to send "stop" command via tmux/screen for graceful shutdown
+        if let tmuxSession = server.tmuxSession {
+            _ = try? await execute("tmux send-keys -t '\(tmuxSession)' 'stop' Enter")
+            // Wait for graceful shutdown (up to 30 seconds)
+            for _ in 0..<30 {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                let isRunning = try? await isServerRunning()
+                if isRunning == false { return }
+            }
+        } else if let screenSession = server.screenSession {
+            _ = try? await execute("screen -S '\(screenSession)' -X stuff 'stop\\n'")
+            // Wait for graceful shutdown (up to 30 seconds)
+            for _ in 0..<30 {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                let isRunning = try? await isServerRunning()
+                if isRunning == false { return }
+            }
+        }
+
+        // Fall back to systemctl stop if graceful shutdown didn't work or no session configured
         guard let unit = server.systemdUnit else {
             throw SSHError.invalidConfiguration
         }
         _ = try await execute("systemctl stop '\(unit)'")
     }
 
-    /// Restart the server
+    /// Restart the server gracefully
     func restartServer() async throws {
         guard let unit = server.systemdUnit else {
             throw SSHError.invalidConfiguration
         }
-        _ = try await execute("systemctl restart '\(unit)'")
+
+        // First, try to send "stop" command via tmux/screen for graceful shutdown
+        if let tmuxSession = server.tmuxSession {
+            _ = try? await execute("tmux send-keys -t '\(tmuxSession)' 'stop' Enter")
+            // Wait for graceful shutdown (up to 30 seconds)
+            for _ in 0..<30 {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                let isRunning = try? await isServerRunning()
+                if isRunning == false { break }
+            }
+        } else if let screenSession = server.screenSession {
+            _ = try? await execute("screen -S '\(screenSession)' -X stuff 'stop\\n'")
+            // Wait for graceful shutdown (up to 30 seconds)
+            for _ in 0..<30 {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                let isRunning = try? await isServerRunning()
+                if isRunning == false { break }
+            }
+        }
+
+        // Now start the server via systemd
+        _ = try await execute("systemctl start '\(unit)'")
     }
 
     /// Get server status details

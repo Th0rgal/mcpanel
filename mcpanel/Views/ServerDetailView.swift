@@ -101,10 +101,6 @@ struct ServerDetailView: View {
                     .padding(.horizontal, 8)
             }
 
-            // Refresh button
-            GlassIconButton(icon: "arrow.triangle.2.circlepath") {
-                Task { await serverManager.refreshServerStatus(server) }
-            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -346,11 +342,8 @@ struct ServerSettingsView: View {
 
                         Picker("", selection: $consoleMode) {
                             ForEach(ConsoleMode.allCases) { mode in
-                                HStack {
-                                    Image(systemName: mode.icon)
-                                    Text(mode.rawValue)
-                                }
-                                .tag(mode)
+                                Text(mode.rawValue)
+                                    .tag(mode)
                             }
                         }
                         .pickerStyle(.segmented)

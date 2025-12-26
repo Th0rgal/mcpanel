@@ -67,6 +67,7 @@ class ServerManager: ObservableObject {
     private var logStreamTasks: [UUID: Task<Void, Never>] = [:]
     private var ptyStreamTasks: [UUID: Task<Void, Never>] = [:]
     private let persistence = PersistenceService()
+    private var statusRefreshTask: Task<Void, Never>?
 
     // PTY state
     @Published var ptyConnected: [UUID: Bool] = [:]
@@ -104,6 +105,25 @@ class ServerManager: ObservableObject {
     init() {
         Task {
             await loadServers()
+            startAutoRefresh()
+        }
+    }
+
+    deinit {
+        statusRefreshTask?.cancel()
+    }
+
+    // MARK: - Auto Refresh
+
+    private func startAutoRefresh() {
+        statusRefreshTask?.cancel()
+        statusRefreshTask = Task {
+            while !Task.isCancelled {
+                // Wait 30 seconds between refreshes
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                guard !Task.isCancelled else { break }
+                await refreshAllServers()
+            }
         }
     }
 
@@ -420,14 +440,8 @@ class ServerManager: ObservableObject {
         history.add(command)
         commandHistory[server.id] = history
 
-        // Add command to console as a message
-        let commandMessage = ConsoleMessage(
-            level: .command,
-            content: command
-        )
-        var messages = consoleMessages[server.id] ?? []
-        messages.append(commandMessage)
-        consoleMessages[server.id] = messages
+        // Don't add command to console - let the server echo it back via PTY
+        // This avoids duplicate display and keeps the UI consistent with server behavior
 
         // Send via PTY if connected, otherwise via SSH
         if ptyConnected[server.id] == true {
@@ -561,6 +575,12 @@ class ServerManager: ObservableObject {
                         if line.isEmpty && index < lines.count - 1 { continue }
                         if line.isEmpty { continue }
 
+                        // Skip tmux status lines (e.g., "[session:window*    "hostname" HH:MM DD-Mon-YY")
+                        if self.isTmuxStatusLine(line) { continue }
+
+                        // Filter out server prompt lines and command echoes
+                        if self.shouldFilterLine(line) { continue }
+
                         // Create message - PTY output should be treated as raw with ANSI codes
                         let message = ConsoleMessage(
                             level: .info,
@@ -587,6 +607,23 @@ class ServerManager: ObservableObject {
         }
     }
 
+    /// Check if a line should be filtered (standalone prompts only)
+    private func shouldFilterLine(_ line: String) -> Bool {
+        // Strip ANSI escape sequences for pattern matching
+        let stripped = line.replacingOccurrences(
+            of: "\u{1B}\\[[0-9;]*[A-Za-z]|\u{1B}\\][^\u{07}]*\u{07}|\u{1B}[^\\[\\]][A-Za-z]",
+            with: "",
+            options: .regularExpression
+        ).trimmingCharacters(in: .whitespaces)
+
+        // Filter standalone prompt lines (just ">") - these are redundant with our UI prompt
+        if stripped == ">" || stripped == "> " {
+            return true
+        }
+
+        return false
+    }
+
     /// Send command via PTY
     func sendPTYCommand(_ command: String, to server: Server) async {
         guard let pty = ptyServices[server.id] else {
@@ -607,6 +644,12 @@ class ServerManager: ObservableObject {
         }
     }
 
+    /// Send raw text to PTY (for tab completion, partial input, etc.)
+    func sendPTYRaw(_ text: String, to server: Server) async {
+        guard let pty = ptyServices[server.id] else { return }
+        try? await pty.send(text)
+    }
+
     /// Send a special key to PTY (arrow keys, etc.)
     func sendPTYKey(_ key: SpecialKey, to server: Server) async {
         guard let pty = ptyServices[server.id] else { return }
@@ -622,6 +665,35 @@ class ServerManager: ObservableObject {
     /// Check if PTY is connected for a server
     func isPTYConnected(for server: Server) -> Bool {
         return ptyConnected[server.id] == true
+    }
+
+    /// Check if a line is a tmux status line that should be filtered out
+    /// Matches patterns like: [session:window*           "hostname" 17:46 26-Dec-25
+    private func isTmuxStatusLine(_ line: String) -> Bool {
+        // Strip ANSI escape sequences for pattern matching
+        let stripped = line.replacingOccurrences(
+            of: "\\x1B\\[[0-9;]*[A-Za-z]|\\x1B\\][^\\x07]*\\x07|\\x1B[^\\[\\]][A-Za-z]",
+            with: "",
+            options: .regularExpression
+        )
+
+        // Tmux status line pattern: [session:window* or [session:window-
+        // followed by spaces, quotes, hostname, time, and date
+        let tmuxStatusPattern = #"^\[[\w\d-]+:[\w\d*-]+\s+"#
+        if let regex = try? NSRegularExpression(pattern: tmuxStatusPattern),
+           regex.firstMatch(in: stripped, range: NSRange(stripped.startIndex..., in: stripped)) != nil {
+            return true
+        }
+
+        // Also filter tmux window list lines
+        // Pattern: (N) session:window* or (N) session:window-
+        let tmuxWindowListPattern = #"^\(\d+\)\s+[\w\d-]+:[\w\d*-]+\s+"#
+        if let regex = try? NSRegularExpression(pattern: tmuxWindowListPattern),
+           regex.firstMatch(in: stripped, range: NSRange(stripped.startIndex..., in: stripped)) != nil {
+            return true
+        }
+
+        return false
     }
 
     // MARK: - Plugins

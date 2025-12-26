@@ -424,6 +424,10 @@ struct MinecraftFormattedText: View {
     private func parseMinecraftFormatting(_ input: String) -> AttributedString {
         var result = AttributedString()
 
+        // First, convert escaped newlines (\n) to actual newlines
+        // In server.properties, newlines are stored as literal backslash-n
+        let processedInput = input.replacingOccurrences(of: "\\n", with: "\n")
+
         // Minecraft color codes
         let colors: [Character: Color] = [
             "0": Color(hex: "000000"), // Black
@@ -452,13 +456,13 @@ struct MinecraftFormattedText: View {
         var _isObfuscated = false  // Not rendered visually, but parsed for completeness
 
         var currentText = ""
-        var i = input.startIndex
+        var i = processedInput.startIndex
 
-        while i < input.endIndex {
-            let char = input[i]
+        while i < processedInput.endIndex {
+            let char = processedInput[i]
 
             // Check for § or & formatting codes
-            if (char == "§" || char == "&") && input.index(after: i) < input.endIndex {
+            if (char == "§" || char == "&") && processedInput.index(after: i) < processedInput.endIndex {
                 // Flush current text
                 if !currentText.isEmpty {
                     var attr = AttributedString(currentText)
@@ -471,8 +475,8 @@ struct MinecraftFormattedText: View {
                     currentText = ""
                 }
 
-                let codeIndex = input.index(after: i)
-                let code = input[codeIndex].lowercased().first!
+                let codeIndex = processedInput.index(after: i)
+                let code = processedInput[codeIndex].lowercased().first!
 
                 if let color = colors[code] {
                     currentColor = color
@@ -500,10 +504,10 @@ struct MinecraftFormattedText: View {
                     }
                 }
 
-                i = input.index(after: codeIndex)
+                i = processedInput.index(after: codeIndex)
             } else {
                 currentText.append(char)
-                i = input.index(after: i)
+                i = processedInput.index(after: i)
             }
         }
 
