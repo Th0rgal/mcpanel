@@ -240,32 +240,38 @@ final class APIService {
     func streamControl(onEvent: @escaping (String, [String: Any]) -> Void) -> Task<Void, Never> {
         Task {
             guard let url = URL(string: "\(baseURL)/api/control/stream") else { return }
-            
+
             var request = URLRequest(url: url)
             request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-            
+
             if let token = jwtToken {
                 request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             }
-            
+
             do {
                 let (stream, _) = try await URLSession.shared.bytes(for: request)
-                
-                var buffer = ""
+
+                var byteBuffer = Data()
+                var textBuffer = ""
                 for try await byte in stream {
                     guard !Task.isCancelled else { break }
-                    
-                    if let char = String(bytes: [byte], encoding: .utf8) {
-                        buffer.append(char)
-                        
+
+                    byteBuffer.append(byte)
+
+                    // Try to decode accumulated bytes as UTF-8
+                    if let decoded = String(data: byteBuffer, encoding: .utf8) {
+                        textBuffer.append(decoded)
+                        byteBuffer.removeAll()
+
                         // Look for double newline (end of SSE event)
-                        while let range = buffer.range(of: "\n\n") {
-                            let eventString = String(buffer[..<range.lowerBound])
-                            buffer = String(buffer[range.upperBound...])
-                            
+                        while let range = textBuffer.range(of: "\n\n") {
+                            let eventString = String(textBuffer[..<range.lowerBound])
+                            textBuffer = String(textBuffer[range.upperBound...])
+
                             parseSSEEvent(eventString, onEvent: onEvent)
                         }
                     }
+                    // If decoding fails, keep accumulating bytes for multi-byte UTF-8 sequences
                 }
             } catch {
                 if !Task.isCancelled {

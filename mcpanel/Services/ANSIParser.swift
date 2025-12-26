@@ -91,15 +91,21 @@ final class ANSIParser {
     func process(_ text: String) -> AttributedString {
         result = AttributedString()
         currentText = ""
-        
+
         for scalar in text.unicodeScalars {
-            let byte = UInt8(min(scalar.value, 255))
-            processByte(byte, char: Character(scalar))
+            // For unicode characters beyond Latin-1 (> 255), append directly as printable
+            if scalar.value > 255 {
+                // Treat as printable character (emoji, CJK, etc.)
+                currentText.append(Character(scalar))
+            } else {
+                let byte = UInt8(scalar.value)
+                processByte(byte, char: Character(scalar))
+            }
         }
-        
+
         // Flush any remaining text
         flushText()
-        
+
         return result
     }
     
@@ -197,7 +203,7 @@ final class ANSIParser {
         case 0x7F:
             // DEL - ignore
             break
-        case 0xA0...0xFE:
+        case 0xA0...0xFF:
             // Printable high bytes (treat like GL)
             currentText.append(char)
         default:
