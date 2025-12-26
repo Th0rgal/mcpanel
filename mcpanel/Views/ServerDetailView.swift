@@ -31,7 +31,7 @@ struct ServerDetailView: View {
         case .console:
             // Console view extends to top with fade effect
             ZStack(alignment: .topTrailing) {
-                ConsoleView()
+                SwiftTermConsoleView()
                     .environmentObject(serverManager)
 
                 // Top fade gradient overlay

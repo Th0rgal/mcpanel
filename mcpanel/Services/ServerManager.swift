@@ -73,6 +73,9 @@ class ServerManager: ObservableObject {
     @Published var ptyConnected: [UUID: Bool] = [:]
     @Published var detectedSessions: [UUID: [DetectedSession]] = [:]
 
+    // Raw PTY output callbacks for SwiftTerm integration
+    private var ptyOutputCallbacks: [UUID: (String) -> Void] = [:]
+
     // MARK: - Computed Properties
 
     var selectedServer: Server? {
@@ -565,8 +568,14 @@ class ServerManager: ObservableObject {
             for await chunk in stream {
                 guard !Task.isCancelled else { break }
 
-                // PTY output comes as chunks (may contain multiple lines or partial lines)
-                // For now, treat each chunk as potentially containing ANSI sequences
+                // Send raw output to SwiftTerm callback if registered
+                await MainActor.run {
+                    if let callback = self.ptyOutputCallbacks[serverId] {
+                        callback(chunk)
+                    }
+                }
+
+                // Also process for legacy console messages (can be removed once SwiftTerm is fully integrated)
                 await MainActor.run {
                     // Split by newlines but preserve the raw output for ANSI parsing
                     let lines = chunk.components(separatedBy: "\n")
@@ -605,6 +614,16 @@ class ServerManager: ObservableObject {
                 self.ptyConnected[serverId] = false
             }
         }
+    }
+
+    /// Register a callback to receive raw PTY output (for SwiftTerm)
+    func registerPTYOutputCallback(for server: Server, callback: @escaping (String) -> Void) {
+        ptyOutputCallbacks[server.id] = callback
+    }
+
+    /// Unregister PTY output callback
+    func unregisterPTYOutputCallback(for server: Server) {
+        ptyOutputCallbacks.removeValue(forKey: server.id)
     }
 
     /// Check if a line should be filtered (standalone prompts only)

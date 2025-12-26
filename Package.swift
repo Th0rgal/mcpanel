@@ -9,11 +9,15 @@ let package = Package(
     products: [
         .executable(name: "MCPanel", targets: ["MCPanel"])
     ],
-    dependencies: [],
+    dependencies: [
+        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.2.0")
+    ],
     targets: [
         .executableTarget(
             name: "MCPanel",
-            dependencies: [],
+            dependencies: [
+                .product(name: "SwiftTerm", package: "SwiftTerm")
+            ],
             path: "mcpanel",
             exclude: [
                 "Info.plist",
