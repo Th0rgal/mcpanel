@@ -16,29 +16,54 @@ struct SwiftTerminalView: NSViewRepresentable {
     @Binding var isConnected: Bool
     var onSendData: ((Data) -> Void)?
     var onResize: ((Int, Int) -> Void)?  // cols, rows
+    var size: CGSize  // Explicit size from GeometryReader
 
     // Reference to allow external data feeding
     @Binding var terminalRef: SwiftTerminalController?
 
-    func makeNSView(context: Context) -> TerminalView {
-        let terminal = TerminalView(frame: .zero)
+    func makeNSView(context: Context) -> NSView {
+        // Create a container view that will host the terminal
+        let container = NSView(frame: NSRect(origin: .zero, size: size))
+        let terminal = TerminalView(frame: container.bounds)
         terminal.terminalDelegate = context.coordinator
+        terminal.autoresizingMask = [.width, .height]
 
         // Configure terminal appearance
         configureTerminal(terminal)
+
+        container.addSubview(terminal)
 
         // Store reference for external data feeding
         DispatchQueue.main.async {
             self.terminalRef = SwiftTerminalController(terminalView: terminal)
         }
 
-        return terminal
+        return container
     }
 
-    func updateNSView(_ nsView: TerminalView, context: Context) {
-        // Update connection state visual feedback if needed
+    func updateNSView(_ nsView: NSView, context: Context) {
+        // Update callbacks
         context.coordinator.onSendData = onSendData
         context.coordinator.onResize = onResize
+
+        // Get the terminal view from container
+        guard let terminal = nsView.subviews.first as? TerminalView else { return }
+
+        // Update frame when size changes
+        if nsView.frame.size != size && size.width > 0 && size.height > 0 {
+            nsView.frame = NSRect(origin: .zero, size: size)
+            terminal.frame = nsView.bounds
+            terminal.needsDisplay = true
+        }
+    }
+
+    // Tell SwiftUI to use the proposed size
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSView, context: Context) -> CGSize? {
+        // Return the proposed size so the view fills available space
+        return CGSize(
+            width: proposal.width ?? size.width,
+            height: proposal.height ?? size.height
+        )
     }
 
     func makeCoordinator() -> Coordinator {
@@ -176,16 +201,19 @@ struct SwiftTermConsoleView: View {
     @State private var hasRegisteredCallback = false
 
     var body: some View {
-        SwiftTerminalView(
-            isConnected: $isConnected,
-            onSendData: { data in
-                handleSendData(data)
-            },
-            onResize: { cols, rows in
-                handleResize(cols: cols, rows: rows)
-            },
-            terminalRef: $terminalController
-        )
+        GeometryReader { geometry in
+            SwiftTerminalView(
+                isConnected: $isConnected,
+                onSendData: { data in
+                    handleSendData(data)
+                },
+                onResize: { cols, rows in
+                    handleResize(cols: cols, rows: rows)
+                },
+                size: geometry.size,
+                terminalRef: $terminalController
+            )
+        }
         .onAppear {
             connectToServer()
         }
@@ -200,9 +228,11 @@ struct SwiftTermConsoleView: View {
         }
         .onReceive(Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()) { _ in
             // Register callback when terminal controller becomes available
-            if terminalController != nil && !hasRegisteredCallback {
+            if let controller = terminalController, !hasRegisteredCallback {
                 hasRegisteredCallback = true
                 registerPTYCallback()
+                let dims = controller.dimensions
+                handleResize(cols: dims.cols, rows: dims.rows)
             }
         }
     }
@@ -262,8 +292,10 @@ struct SwiftTermConsoleView: View {
     }
 
     private func handleResize(cols: Int, rows: Int) {
-        // TODO: Send terminal resize to PTY if supported
-        // This would require adding resize support to PTYService
+        guard let server = serverManager.selectedServer else { return }
+        Task {
+            await serverManager.resizePTY(for: server, cols: cols, rows: rows)
+        }
     }
 }
 

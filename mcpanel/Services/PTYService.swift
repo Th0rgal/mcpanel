@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import Darwin
 
 // MARK: - PTY Error
 
@@ -64,8 +65,10 @@ struct DetectedSession: Identifiable {
 actor PTYService {
     private let server: Server
     private var process: Process?
-    private var inputPipe: Pipe?
-    private var outputPipe: Pipe?
+    private var masterFD: Int32?
+    private var slaveFD: Int32?
+    private var masterHandle: FileHandle?
+    private var slaveHandle: FileHandle?
     private var isConnected = false
     private var sessionType: SessionType = .direct
     private var sessionName: String?
@@ -175,9 +178,12 @@ actor PTYService {
             }
         case .tmux:
             if let name = sessionName {
-                remoteCommand = "tmux attach-session -t '\(name)'"
+                // SwiftTerm does not provide scrollback while the client is in the alternate screen buffer.
+                // tmux normally switches into the alternate screen via smcup/rmcup. We disable those
+                // capabilities for xterm* so the terminal remains scrollable.
+                remoteCommand = "tmux set-option -g -a terminal-overrides ',xterm*:smcup@:rmcup@' \\; attach-session -t '\(name)'"
             } else {
-                remoteCommand = "tmux attach-session 2>/dev/null || tmux list-sessions"
+                remoteCommand = "tmux set-option -g -a terminal-overrides ',xterm*:smcup@:rmcup@' \\; attach-session 2>/dev/null || tmux list-sessions"
             }
         case .direct:
             // Just allocate a PTY and drop to shell
@@ -233,22 +239,42 @@ actor PTYService {
 
         process.arguments = args
 
-        // Set up pipes for I/O
-        let inputPipe = Pipe()
-        let outputPipe = Pipe()
+        // Allocate a local PTY so ssh sees a real TTY (enables proper window sizing + SIGWINCH)
+        var master: Int32 = 0
+        var slave: Int32 = 0
+        if openpty(&master, &slave, nil, nil, nil) != 0 {
+            throw PTYError.connectionFailed("Failed to allocate PTY")
+        }
 
-        process.standardInput = inputPipe
-        process.standardOutput = outputPipe
-        process.standardError = outputPipe  // Combine stderr with stdout
+        // Apply initial window size before launching ssh so the remote PTY starts correctly sized
+        applyWinsize(cols: termWidth, rows: termHeight, to: slave)
+
+        let masterHandle = FileHandle(fileDescriptor: master, closeOnDealloc: false)
+        let slaveHandle = FileHandle(fileDescriptor: slave, closeOnDealloc: false)
+
+        process.standardInput = slaveHandle
+        process.standardOutput = slaveHandle
+        process.standardError = slaveHandle  // Combine stderr with stdout
 
         self.process = process
-        self.inputPipe = inputPipe
-        self.outputPipe = outputPipe
+        self.masterFD = master
+        self.slaveFD = slave
+        self.masterHandle = masterHandle
+        self.slaveHandle = slaveHandle
 
         do {
             try process.run()
             isConnected = true
+            // Nudge ssh to propagate our current winsize to the remote
+            signalResize()
         } catch {
+            // Clean up FDs if launch fails
+            masterHandle.closeFile()
+            slaveHandle.closeFile()
+            self.masterFD = nil
+            self.slaveFD = nil
+            self.masterHandle = nil
+            self.slaveHandle = nil
             throw PTYError.connectionFailed(error.localizedDescription)
         }
     }
@@ -257,42 +283,60 @@ actor PTYService {
     func disconnect() {
         isConnected = false
 
-        // Send exit command gracefully first
-        if let inputHandle = inputPipe?.fileHandleForWriting {
-            // Send Ctrl+A, d for screen (detach)
-            // Or just send exit
-            if let exitData = "exit\n".data(using: .utf8) {
-                try? inputHandle.write(contentsOf: exitData)
-            }
-        }
-
-        // Give it a moment to exit cleanly
-        Thread.sleep(forTimeInterval: 0.1)
-
         // Terminate if still running
         if process?.isRunning == true {
             process?.terminate()
         }
 
         // Clean up
-        inputPipe?.fileHandleForWriting.closeFile()
-        outputPipe?.fileHandleForReading.closeFile()
+        masterHandle?.readabilityHandler = nil
+        masterHandle?.closeFile()
+        slaveHandle?.closeFile()
         process = nil
-        inputPipe = nil
-        outputPipe = nil
+        masterFD = nil
+        slaveFD = nil
+        masterHandle = nil
+        slaveHandle = nil
     }
 
     // MARK: - I/O Operations
 
+    /// Update the PTY window size (and propagate it to the remote via ssh)
+    func setTerminalSize(cols: Int, rows: Int) {
+        termWidth = max(cols, 1)
+        termHeight = max(rows, 1)
+
+        guard let slaveFD else { return }
+        applyWinsize(cols: termWidth, rows: termHeight, to: slaveFD)
+        signalResize()
+    }
+
+    private func applyWinsize(cols: Int, rows: Int, to fd: Int32) {
+        let safeCols = max(1, cols)
+        let safeRows = max(1, rows)
+        var ws = winsize(
+            ws_row: UInt16(min(safeRows, Int(UInt16.max))),
+            ws_col: UInt16(min(safeCols, Int(UInt16.max))),
+            ws_xpixel: 0,
+            ws_ypixel: 0
+        )
+        _ = ioctl(fd, TIOCSWINSZ, &ws)
+    }
+
+    private func signalResize() {
+        guard let pid = process?.processIdentifier else { return }
+        _ = kill(pid, SIGWINCH)
+    }
+
     /// Send input to the PTY (commands, keystrokes, etc.)
     func send(_ text: String) async throws {
-        guard isConnected, let inputHandle = inputPipe?.fileHandleForWriting else {
+        guard isConnected, let masterHandle else {
             throw PTYError.notConnected
         }
 
         guard let data = text.data(using: .utf8) else { return }
 
-        try inputHandle.write(contentsOf: data)
+        try masterHandle.write(contentsOf: data)
     }
 
     /// Send a command followed by Enter
@@ -306,11 +350,11 @@ actor PTYService {
         let controlValue = asciiValue & 0x1F  // Convert to control character
         let data = Data([controlValue])
 
-        guard isConnected, let inputHandle = inputPipe?.fileHandleForWriting else {
+        guard isConnected, let masterHandle else {
             throw PTYError.notConnected
         }
 
-        try inputHandle.write(contentsOf: data)
+        try masterHandle.write(contentsOf: data)
     }
 
     /// Send special key sequence (for screen/tmux navigation)
@@ -336,7 +380,7 @@ actor PTYService {
     /// Stream output from the PTY
     func streamOutput() -> AsyncStream<String> {
         AsyncStream { continuation in
-            guard let outputHandle = outputPipe?.fileHandleForReading else {
+            guard let outputHandle = masterHandle else {
                 continuation.finish()
                 return
             }

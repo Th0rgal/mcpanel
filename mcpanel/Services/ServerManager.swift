@@ -72,6 +72,7 @@ class ServerManager: ObservableObject {
     // PTY state
     @Published var ptyConnected: [UUID: Bool] = [:]
     @Published var detectedSessions: [UUID: [DetectedSession]] = [:]
+    private var desiredPTYSize: [UUID: (cols: Int, rows: Int)] = [:]
 
     // Raw PTY output callbacks for SwiftTerm integration
     private var ptyOutputCallbacks: [UUID: (String) -> Void] = [:]
@@ -515,6 +516,11 @@ class ServerManager: ObservableObject {
             ptyConnected[server.id] = true
             print("[PTY] Connected successfully")
 
+            // Apply any pending terminal size that the UI has reported.
+            if let desired = desiredPTYSize[server.id] {
+                await pty.setTerminalSize(cols: desired.cols, rows: desired.rows)
+            }
+
             // Start streaming PTY output
             startPTYStream(for: server)
 
@@ -667,6 +673,14 @@ class ServerManager: ObservableObject {
     func sendPTYRaw(_ text: String, to server: Server) async {
         guard let pty = ptyServices[server.id] else { return }
         try? await pty.send(text)
+    }
+
+    /// Resize the active PTY session to match the on-screen terminal size.
+    /// This updates the local PTY winsize and triggers ssh to propagate the change to the remote.
+    func resizePTY(for server: Server, cols: Int, rows: Int) async {
+        desiredPTYSize[server.id] = (cols: cols, rows: rows)
+        guard let pty = ptyServices[server.id] else { return }
+        await pty.setTerminalSize(cols: cols, rows: rows)
     }
 
     /// Send a special key to PTY (arrow keys, etc.)
