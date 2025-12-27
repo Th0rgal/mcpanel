@@ -1,0 +1,498 @@
+//
+//  SSHService.swift
+//  MCPanel
+//
+//  SSH command execution service using the system ssh command
+//
+
+import Foundation
+
+// MARK: - SSH Error
+
+enum SSHError: Error, LocalizedError {
+    case connectionFailed(String)
+    case commandFailed(String)
+    case timeout
+    case invalidConfiguration
+
+    var errorDescription: String? {
+        switch self {
+        case .connectionFailed(let message):
+            return "SSH connection failed: \(message)"
+        case .commandFailed(let message):
+            return "Command failed: \(message)"
+        case .timeout:
+            return "SSH operation timed out"
+        case .invalidConfiguration:
+            return "Invalid SSH configuration"
+        }
+    }
+}
+
+// MARK: - SSH Service
+
+actor SSHService {
+    private let server: Server
+    private var isConnected = false
+
+    init(server: Server) {
+        self.server = server
+    }
+
+    // MARK: - Connection Test
+
+    func testConnection() async throws -> Bool {
+        let result = try await execute("echo 'connected'")
+        return result.trimmingCharacters(in: .whitespacesAndNewlines) == "connected"
+    }
+
+    // MARK: - Command Execution
+
+    func execute(_ command: String, timeout: TimeInterval = 30) async throws -> String {
+        let sshCommand = buildSSHCommand(remoteCommand: command)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        process.arguments = sshCommand
+
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = errorPipe
+
+        do {
+            try process.run()
+        } catch {
+            throw SSHError.connectionFailed(error.localizedDescription)
+        }
+
+        // Wait with timeout
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning && Date() < deadline {
+            try await Task.sleep(nanoseconds: 100_000_000)  // 100ms
+        }
+
+        if process.isRunning {
+            process.terminate()
+            throw SSHError.timeout
+        }
+
+        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+
+        let output = String(data: outputData, encoding: .utf8) ?? ""
+        let errorOutput = String(data: errorData, encoding: .utf8) ?? ""
+
+        if process.terminationStatus != 0 && !errorOutput.isEmpty {
+            throw SSHError.commandFailed(errorOutput)
+        }
+
+        isConnected = true
+        return output
+    }
+
+    // MARK: - Streaming Output
+
+    func stream(_ command: String) -> AsyncStream<String> {
+        AsyncStream { continuation in
+            Task {
+                let sshCommand = buildSSHCommand(remoteCommand: command)
+
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+                process.arguments = sshCommand
+
+                let outputPipe = Pipe()
+                process.standardOutput = outputPipe
+                process.standardError = outputPipe
+
+                outputPipe.fileHandleForReading.readabilityHandler = { handle in
+                    let data = handle.availableData
+                    guard !data.isEmpty else { return }
+                    if let line = String(data: data, encoding: .utf8) {
+                        continuation.yield(line)
+                    }
+                }
+
+                process.terminationHandler = { _ in
+                    outputPipe.fileHandleForReading.readabilityHandler = nil
+                    continuation.finish()
+                }
+
+                do {
+                    try process.run()
+                } catch {
+                    continuation.finish()
+                }
+            }
+        }
+    }
+
+    // MARK: - Helper Methods
+
+    private func buildSSHCommand(remoteCommand: String) -> [String] {
+        var args: [String] = []
+
+        // Add identity file if specified
+        if let identityFile = server.identityFilePath, !identityFile.isEmpty {
+            let expandedPath = NSString(string: identityFile).expandingTildeInPath
+            args.append(contentsOf: ["-i", expandedPath])
+        }
+
+        // SSH options for non-interactive use
+        args.append(contentsOf: [
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=10",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "LogLevel=ERROR"
+        ])
+
+        // Port if non-standard
+        if server.sshPort != 22 {
+            args.append(contentsOf: ["-p", String(server.sshPort)])
+        }
+
+        // User@host
+        args.append("\(server.sshUsername)@\(server.host)")
+
+        // Remote command
+        args.append(remoteCommand)
+
+        return args
+    }
+}
+
+// MARK: - Convenience Extensions
+
+extension SSHService {
+    /// List files in a directory
+    func listFiles(path: String) async throws -> [FileItem] {
+        let output = try await execute("ls -la '\(path)'")
+        let lines = output.components(separatedBy: .newlines)
+
+        return lines.compactMap { line in
+            FileItem.parse(line: line, parentPath: path)
+        }
+    }
+
+    /// List plugins in the plugins directory
+    func listPlugins() async throws -> [Plugin] {
+        let pluginsPath = server.effectivePluginsPath
+        let output = try await execute("ls -la '\(pluginsPath)'")
+        let lines = output.components(separatedBy: .newlines)
+
+        var plugins: [Plugin] = []
+
+        for line in lines {
+            let components = line.split(separator: " ", omittingEmptySubsequences: true)
+            guard components.count >= 9 else { continue }
+
+            let size = Int64(components[4]) ?? 0
+            let fileName = components[8...].joined(separator: " ")
+
+            if let plugin = Plugin.fromFileName(fileName, fileSize: size) {
+                plugins.append(plugin)
+            }
+        }
+
+        return plugins.sorted { $0.name.lowercased() < $1.name.lowercased() }
+    }
+
+    /// Enable or disable a plugin by renaming
+    func togglePlugin(_ plugin: Plugin) async throws {
+        let pluginsPath = server.effectivePluginsPath
+        let currentPath = "\(pluginsPath)/\(plugin.fileName)"
+        let newFileName = plugin.isEnabled ? plugin.disabledFileName : plugin.enabledFileName
+        let newPath = "\(pluginsPath)/\(newFileName)"
+
+        try await execute("mv '\(currentPath)' '\(newPath)'")
+    }
+
+    /// Check if the server is running (via systemd)
+    func isServerRunning() async throws -> Bool {
+        guard let unit = server.systemdUnit else {
+            return false
+        }
+
+        let output = try await execute("systemctl is-active '\(unit)'")
+        return output.trimmingCharacters(in: .whitespacesAndNewlines) == "active"
+    }
+
+    /// Start the server
+    func startServer() async throws {
+        guard let unit = server.systemdUnit else {
+            throw SSHError.invalidConfiguration
+        }
+        _ = try await execute("systemctl start '\(unit)'")
+    }
+
+    /// Stop the server gracefully by sending "stop" command to Minecraft console
+    func stopServer() async throws {
+        // First, try to send "stop" command via tmux/screen for graceful shutdown
+        if let tmuxSession = server.tmuxSession {
+            _ = try? await execute("tmux send-keys -t '\(tmuxSession)' 'stop' Enter")
+            // Wait for graceful shutdown (up to 30 seconds)
+            for _ in 0..<30 {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                let isRunning = try? await isServerRunning()
+                if isRunning == false { return }
+            }
+        } else if let screenSession = server.screenSession {
+            _ = try? await execute("screen -S '\(screenSession)' -X stuff 'stop\\n'")
+            // Wait for graceful shutdown (up to 30 seconds)
+            for _ in 0..<30 {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                let isRunning = try? await isServerRunning()
+                if isRunning == false { return }
+            }
+        }
+
+        // Fall back to systemctl stop if graceful shutdown didn't work or no session configured
+        guard let unit = server.systemdUnit else {
+            throw SSHError.invalidConfiguration
+        }
+        _ = try await execute("systemctl stop '\(unit)'")
+    }
+
+    /// Restart the server gracefully
+    func restartServer() async throws {
+        guard let unit = server.systemdUnit else {
+            throw SSHError.invalidConfiguration
+        }
+
+        // First, try to send "stop" command via tmux/screen for graceful shutdown
+        if let tmuxSession = server.tmuxSession {
+            _ = try? await execute("tmux send-keys -t '\(tmuxSession)' 'stop' Enter")
+            // Wait for graceful shutdown (up to 30 seconds)
+            for _ in 0..<30 {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                let isRunning = try? await isServerRunning()
+                if isRunning == false { break }
+            }
+        } else if let screenSession = server.screenSession {
+            _ = try? await execute("screen -S '\(screenSession)' -X stuff 'stop\\n'")
+            // Wait for graceful shutdown (up to 30 seconds)
+            for _ in 0..<30 {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                let isRunning = try? await isServerRunning()
+                if isRunning == false { break }
+            }
+        }
+
+        // Now start the server via systemd
+        _ = try await execute("systemctl start '\(unit)'")
+    }
+
+    /// Get server status details
+    func getServerStatus() async throws -> String {
+        guard let unit = server.systemdUnit else {
+            throw SSHError.invalidConfiguration
+        }
+        return try await execute("systemctl status '\(unit)' --no-pager")
+    }
+
+    /// Detect Minecraft version and server type from logs
+    func detectServerInfo() async throws -> (version: String?, serverType: ServerType?) {
+        let logPath = "\(server.serverPath)/logs/latest.log"
+        let output = try await execute("head -50 '\(logPath)' 2>/dev/null || echo ''")
+
+        var version: String?
+        var serverType: ServerType?
+
+        // Parse version from log - look for "server version X.X.X"
+        let lines = output.components(separatedBy: .newlines)
+        for line in lines {
+            // Example: "Starting minecraft server version 1.21.11"
+            if line.lowercased().contains("server version") {
+                let parts = line.components(separatedBy: " ")
+                for (index, part) in parts.enumerated() {
+                    if part.lowercased() == "version" && index + 1 < parts.count {
+                        let potentialVersion = parts[index + 1]
+                        // Check if it looks like a version number
+                        if potentialVersion.first?.isNumber == true {
+                            version = potentialVersion.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+                            break
+                        }
+                    }
+                }
+            }
+            if version != nil { break }
+        }
+
+        // Detect server type from log
+        let lowerOutput = output.lowercased()
+        if lowerOutput.contains("paper version") || lowerOutput.contains("running paper") {
+            serverType = .paper
+        } else if lowerOutput.contains("purpur version") || lowerOutput.contains("running purpur") {
+            serverType = .purpur
+        } else if lowerOutput.contains("spigot version") || lowerOutput.contains("running spigot") {
+            serverType = .spigot
+        } else if lowerOutput.contains("fabric") {
+            serverType = .fabric
+        } else if lowerOutput.contains("forge") {
+            serverType = .forge
+        } else if lowerOutput.contains("velocity") {
+            serverType = .velocity
+        } else if lowerOutput.contains("vanilla") || (lowerOutput.contains("dedicated server") && !lowerOutput.contains("paper") && !lowerOutput.contains("spigot")) {
+            serverType = .vanilla
+        }
+
+        return (version, serverType)
+    }
+
+    /// Tail the server log
+    func tailLog(lines: Int = 100) async throws -> String {
+        let logPath = "\(server.serverPath)/logs/latest.log"
+        return try await execute("tail -n \(lines) '\(logPath)'")
+    }
+
+    /// Stream the server log
+    func streamLog() -> AsyncStream<String> {
+        let logPath = "\(server.serverPath)/logs/latest.log"
+        return stream("tail -f '\(logPath)'")
+    }
+
+    /// Send a command to the Minecraft server via RCON, screen, or tmux
+    func sendCommand(_ command: String) async throws {
+        // Try RCON first (most reliable for systemd-managed servers)
+        if let rconPassword = server.rconPassword, !rconPassword.isEmpty {
+            let rconHost = server.rconHost ?? "127.0.0.1"
+            let rconPort = server.rconPort ?? 25575
+            let escapedCommand = command.replacingOccurrences(of: "'", with: "'\\''")
+            let escapedPassword = rconPassword.replacingOccurrences(of: "'", with: "'\\''")
+
+            // Check if mcrcon is available, install if not
+            let mcrconCheck = try? await execute("which mcrcon || which /usr/local/bin/mcrcon")
+            let mcrconPath = mcrconCheck?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+            if !mcrconPath.isEmpty {
+                let rconCommand = "\(mcrconPath) -H '\(rconHost)' -P \(rconPort) -p '\(escapedPassword)' '\(escapedCommand)'"
+                _ = try await execute(rconCommand)
+                return
+            }
+
+            // Try to install mcrcon if not available
+            _ = try? await execute("apt-get install -y mcrcon 2>/dev/null || (cd /tmp && rm -rf mcrcon && git clone https://github.com/Tiiffi/mcrcon.git && cd mcrcon && make && cp mcrcon /usr/local/bin/)")
+
+            // Retry with mcrcon after installation
+            let rconCommand = "mcrcon -H '\(rconHost)' -P \(rconPort) -p '\(escapedPassword)' '\(escapedCommand)'"
+            _ = try await execute(rconCommand)
+            return
+        }
+
+        // Try screen session if configured
+        if let screenSession = server.screenSession, !screenSession.isEmpty {
+            let escapedCommand = command.replacingOccurrences(of: "'", with: "'\\''")
+            let screenCommand = "screen -S '\(screenSession)' -X stuff '\(escapedCommand)\n'"
+            _ = try await execute(screenCommand)
+            return
+        }
+
+        // Fallback: try to find a running screen session
+        let screenList = try? await execute("screen -ls 2>/dev/null | awk '/[0-9]+\\./ {print $1}' | head -1")
+        if let session = screenList?.trimmingCharacters(in: .whitespacesAndNewlines), !session.isEmpty {
+            let escapedCommand = command.replacingOccurrences(of: "'", with: "'\\''")
+            let screenCommand = "screen -S '\(session)' -X stuff '\(escapedCommand)\n'"
+            _ = try await execute(screenCommand)
+            return
+        }
+
+        // Try tmux as alternative
+        let tmuxList = try? await execute("tmux list-sessions 2>/dev/null | head -1 | cut -d: -f1")
+        if let session = tmuxList?.trimmingCharacters(in: .whitespacesAndNewlines), !session.isEmpty {
+            let escapedCommand = command.replacingOccurrences(of: "'", with: "'\\''")
+            let tmuxCommand = "tmux send-keys -t '\(session)' '\(escapedCommand)' Enter"
+            _ = try await execute(tmuxCommand)
+            return
+        }
+
+        throw SSHError.commandFailed("No RCON, screen, or tmux session found. Configure RCON password or screen session in server settings.")
+    }
+
+    /// Upload a file via scp
+    func uploadFile(localPath: String, remotePath: String) async throws {
+        var args: [String] = []
+
+        // Add identity file if specified
+        if let identityFile = server.identityFilePath, !identityFile.isEmpty {
+            let expandedPath = NSString(string: identityFile).expandingTildeInPath
+            args.append(contentsOf: ["-i", expandedPath])
+        }
+
+        // SCP options
+        args.append(contentsOf: [
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=10",
+            "-o", "StrictHostKeyChecking=no"
+        ])
+
+        // Port if non-standard
+        if server.sshPort != 22 {
+            args.append(contentsOf: ["-P", String(server.sshPort)])
+        }
+
+        // Source and destination
+        args.append(localPath)
+        args.append("\(server.sshUsername)@\(server.host):\(remotePath)")
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/scp")
+        process.arguments = args
+
+        let errorPipe = Pipe()
+        process.standardError = errorPipe
+
+        try process.run()
+        process.waitUntilExit()
+
+        if process.terminationStatus != 0 {
+            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let errorOutput = String(data: errorData, encoding: .utf8) ?? "Unknown error"
+            throw SSHError.commandFailed(errorOutput)
+        }
+    }
+
+    /// Download a file via scp
+    func downloadFile(remotePath: String, localPath: String) async throws {
+        var args: [String] = []
+
+        // Add identity file if specified
+        if let identityFile = server.identityFilePath, !identityFile.isEmpty {
+            let expandedPath = NSString(string: identityFile).expandingTildeInPath
+            args.append(contentsOf: ["-i", expandedPath])
+        }
+
+        // SCP options
+        args.append(contentsOf: [
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=10",
+            "-o", "StrictHostKeyChecking=no"
+        ])
+
+        // Port if non-standard
+        if server.sshPort != 22 {
+            args.append(contentsOf: ["-P", String(server.sshPort)])
+        }
+
+        // Source and destination
+        args.append("\(server.sshUsername)@\(server.host):\(remotePath)")
+        args.append(localPath)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/scp")
+        process.arguments = args
+
+        let errorPipe = Pipe()
+        process.standardError = errorPipe
+
+        try process.run()
+        process.waitUntilExit()
+
+        if process.terminationStatus != 0 {
+            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let errorOutput = String(data: errorData, encoding: .utf8) ?? "Unknown error"
+            throw SSHError.commandFailed(errorOutput)
+        }
+    }
+}
