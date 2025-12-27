@@ -93,6 +93,11 @@ struct SwiftTerminalView: NSViewRepresentable {
 
         // Terminal options
         terminal.optionAsMetaKey = true
+
+        // Increase scrollback buffer significantly (default is 500)
+        // This enables smooth native scrolling through terminal history
+        terminal.getTerminal().options.scrollback = 10000
+        terminal.getTerminal().resetNormalBuffer()
     }
 
     // MARK: - Coordinator
@@ -351,45 +356,9 @@ struct SwiftTermConsoleView: View {
     }
 
     private func handleScrollWheel(deltaY: CGFloat) -> Bool {
-        guard deltaY != 0,
-              let server = serverManager.selectedServer else { return false }
-
-        // For tmux/screen sessions, drive remote scrolling rather than SwiftTerm's local scrollback.
-        // This works even when the terminal is in the alternate screen buffer.
-        switch server.consoleMode {
-        case .ptyTmux:
-            let repeats = scrollRepeats(for: deltaY)
-            let key: SpecialKey = deltaY > 0 ? .pageUp : .pageDown
-            Task {
-                // Enter tmux copy-mode (default prefix Ctrl+B then '['), then page.
-                await serverManager.sendPTYRaw("\u{02}[", to: server)
-                for _ in 0..<repeats {
-                    await serverManager.sendPTYKey(key, to: server)
-                }
-            }
-            return true
-        case .ptyScreen:
-            let repeats = scrollRepeats(for: deltaY)
-            let key: SpecialKey = deltaY > 0 ? .pageUp : .pageDown
-            Task {
-                // Enter screen copy-mode (default prefix Ctrl+A then Esc), then page.
-                await serverManager.sendPTYRaw("\u{01}\u{1B}", to: server)
-                for _ in 0..<repeats {
-                    await serverManager.sendPTYKey(key, to: server)
-                }
-            }
-            return true
-        default:
-            return false
-        }
-    }
-
-    private func scrollRepeats(for deltaY: CGFloat) -> Int {
-        let absDelta = abs(deltaY)
-        if absDelta > 14 { return 4 }
-        if absDelta > 9 { return 3 }
-        if absDelta > 5 { return 2 }
-        return 1
+        // Let SwiftTerm handle scrollback natively - it's smoother and has larger buffer (10k lines)
+        // The tmux smcup@:rmcup@ override disables alternate screen, so scrollback works
+        return false
     }
 }
 
