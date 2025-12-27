@@ -40,12 +40,14 @@ enum SessionType: String, Codable {
     case screen
     case tmux
     case direct  // Direct PTY without multiplexer
+    case mcwrap  // mcwrap session wrapper
 
     var displayName: String {
         switch self {
         case .screen: return "GNU Screen"
         case .tmux: return "tmux"
         case .direct: return "Direct PTY"
+        case .mcwrap: return "mcwrap"
         }
     }
 }
@@ -188,6 +190,10 @@ actor PTYService {
         case .direct:
             // Just allocate a PTY and drop to shell
             remoteCommand = "cd '\(server.serverPath)' && exec bash"
+        case .mcwrap:
+            // mcwrap provides native scrollback + truecolor without alternate screen buffer
+            // Use --raw mode for clean I/O (no decoration, just pipe stdin/stdout)
+            remoteCommand = "mcwrap attach '\(server.serverPath)' --raw"
         }
 
         print("[PTYService] Remote command: \(remoteCommand)")

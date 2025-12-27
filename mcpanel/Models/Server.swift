@@ -47,6 +47,7 @@ enum ConsoleMode: String, Codable, CaseIterable, Identifiable {
     case ptyScreen = "Screen"      // PTY attached to screen session
     case ptyTmux = "Tmux"          // PTY attached to tmux session
     case ptyDirect = "Direct"      // Direct PTY shell
+    case ptyMcwrap = "MCWrap"      // mcwrap session wrapper (recommended)
 
     var id: String { rawValue }
 
@@ -56,6 +57,7 @@ enum ConsoleMode: String, Codable, CaseIterable, Identifiable {
         case .ptyScreen: return "rectangle.split.3x1"
         case .ptyTmux: return "square.split.2x1"
         case .ptyDirect: return "terminal"
+        case .ptyMcwrap: return "arrow.triangle.2.circlepath"
         }
     }
 
@@ -65,6 +67,7 @@ enum ConsoleMode: String, Codable, CaseIterable, Identifiable {
         case .ptyScreen: return "Interactive console via GNU Screen"
         case .ptyTmux: return "Interactive console via tmux"
         case .ptyDirect: return "Direct PTY shell session"
+        case .ptyMcwrap: return "mcwrap session (native scroll + truecolor)"
         }
     }
 
@@ -74,6 +77,7 @@ enum ConsoleMode: String, Codable, CaseIterable, Identifiable {
         case .ptyScreen: return .screen
         case .ptyTmux: return .tmux
         case .ptyDirect: return .direct
+        case .ptyMcwrap: return .mcwrap
         }
     }
 }

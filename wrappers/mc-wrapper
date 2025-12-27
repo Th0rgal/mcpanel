@@ -1,0 +1,332 @@
+#!/bin/bash
+#
+# mc-wrapper - Minimal session wrapper for Minecraft servers
+#
+# Provides:
+#   - Session persistence (survives SSH disconnects)
+#   - Reattachment capability
+#   - Scrollback history (stored in log file)
+#   - Full truecolor support (no alternate screen buffer)
+#   - Multiple simultaneous client connections
+#
+# Usage:
+#   mc-wrapper start <server-dir> [java-args...]   Start the server
+#   mc-wrapper attach <server-dir>                 Attach to running server
+#   mc-wrapper send <server-dir> <command>         Send command to server
+#   mc-wrapper status <server-dir>                 Check if server is running
+#   mc-wrapper stop <server-dir>                   Send 'stop' command
+#   mc-wrapper log <server-dir> [lines]            Show last N lines of log
+#
+# The wrapper uses a Unix socket for I/O and stores scrollback in a log file.
+# Server directory is used to derive unique socket/log paths.
+#
+
+set -euo pipefail
+
+# Configuration
+SCROLLBACK_LINES="${MC_WRAPPER_SCROLLBACK:-10000}"
+SOCKET_DIR="${MC_WRAPPER_SOCKET_DIR:-/tmp/mc-wrapper}"
+LOG_DIR="${MC_WRAPPER_LOG_DIR:-/var/log/mc-wrapper}"
+
+# Derive paths from server directory
+get_paths() {
+    local server_dir="$1"
+    # Create a safe identifier from the server path
+    local safe_id
+    safe_id=$(echo "$server_dir" | sed 's|/|_|g' | sed 's|^_||')
+
+    SOCKET_PATH="${SOCKET_DIR}/${safe_id}.sock"
+    PID_FILE="${SOCKET_DIR}/${safe_id}.pid"
+    LOG_FILE="${LOG_DIR}/${safe_id}.log"
+    FIFO_IN="${SOCKET_DIR}/${safe_id}.in"
+    FIFO_OUT="${SOCKET_DIR}/${safe_id}.out"
+}
+
+# Ensure directories exist
+ensure_dirs() {
+    mkdir -p "$SOCKET_DIR" "$LOG_DIR"
+    chmod 700 "$SOCKET_DIR"
+}
+
+# Check if server is running
+is_running() {
+    local server_dir="$1"
+    get_paths "$server_dir"
+
+    if [[ -f "$PID_FILE" ]]; then
+        local pid
+        pid=$(cat "$PID_FILE")
+        if kill -0 "$pid" 2>/dev/null; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# Start the server wrapper
+do_start() {
+    local server_dir="$1"
+    shift
+
+    get_paths "$server_dir"
+    ensure_dirs
+
+    # Check if already running
+    if is_running "$server_dir"; then
+        echo "Server is already running (PID: $(cat "$PID_FILE"))"
+        exit 1
+    fi
+
+    # Clean up stale files
+    rm -f "$SOCKET_PATH" "$PID_FILE" "$FIFO_IN" "$FIFO_OUT"
+
+    # Create named pipes for I/O
+    mkfifo "$FIFO_IN" "$FIFO_OUT"
+    chmod 600 "$FIFO_IN" "$FIFO_OUT"
+
+    # Find the server JAR
+    cd "$server_dir"
+    local jar_file
+    jar_file=$(find . -maxdepth 1 -name "*.jar" -type f | head -1)
+
+    if [[ -z "$jar_file" ]]; then
+        echo "No .jar file found in $server_dir"
+        rm -f "$FIFO_IN" "$FIFO_OUT"
+        exit 1
+    fi
+
+    # Default Java arguments if none provided
+    local java_args=("$@")
+    if [[ ${#java_args[@]} -eq 0 ]]; then
+        java_args=("-Xms2G" "-Xmx4G" "-jar" "$jar_file" "--nogui")
+    fi
+
+    # Initialize log file
+    : > "$LOG_FILE"
+
+    echo "Starting server wrapper..."
+    echo "  Server dir: $server_dir"
+    echo "  Socket: $SOCKET_PATH"
+    echo "  Log: $LOG_FILE"
+
+    # Start the wrapper daemon in background
+    (
+        # Set up truecolor environment
+        export TERM=xterm-256color
+        export COLORTERM=truecolor
+
+        # Trap to clean up on exit
+        cleanup() {
+            rm -f "$SOCKET_PATH" "$PID_FILE" "$FIFO_IN" "$FIFO_OUT"
+        }
+        trap cleanup EXIT
+
+        # Write our PID
+        echo $$ > "$PID_FILE"
+
+        # Start the Java process with PTY emulation via script command
+        # 'script' allocates a PTY and passes through all I/O including ANSI codes
+        script -q /dev/null java \
+            -Dnet.kyori.ansi.colorLevel=truecolor \
+            "${java_args[@]}" \
+            < "$FIFO_IN" 2>&1 | while IFS= read -r line; do
+            # Append to log file (scrollback)
+            echo "$line" >> "$LOG_FILE"
+
+            # Trim log file if too large
+            local line_count
+            line_count=$(wc -l < "$LOG_FILE")
+            if (( line_count > SCROLLBACK_LINES * 2 )); then
+                tail -n "$SCROLLBACK_LINES" "$LOG_FILE" > "${LOG_FILE}.tmp"
+                mv "${LOG_FILE}.tmp" "$LOG_FILE"
+            fi
+
+            # Output to FIFO for connected clients
+            echo "$line"
+        done > "$FIFO_OUT" &
+
+        local java_pid=$!
+
+        # Keep FIFO_IN open to prevent EOF
+        exec 3>"$FIFO_IN"
+
+        # Wait for Java process
+        wait $java_pid 2>/dev/null || true
+
+        echo "Server process exited"
+    ) &
+
+    disown
+
+    # Wait a moment for startup
+    sleep 1
+
+    if is_running "$server_dir"; then
+        echo "Server started successfully (PID: $(cat "$PID_FILE"))"
+    else
+        echo "Failed to start server"
+        exit 1
+    fi
+}
+
+# Attach to running server (interactive mode)
+do_attach() {
+    local server_dir="$1"
+    get_paths "$server_dir"
+
+    if ! is_running "$server_dir"; then
+        echo "Server is not running"
+        exit 1
+    fi
+
+    echo "Attaching to server (Ctrl+C to detach)..."
+    echo "--- Last ${SCROLLBACK_LINES} lines of log ---"
+
+    # Show scrollback
+    if [[ -f "$LOG_FILE" ]]; then
+        tail -n 100 "$LOG_FILE"
+    fi
+
+    echo "--- Live output ---"
+
+    # Set up trap to handle Ctrl+C gracefully
+    trap 'echo -e "\nDetached."; exit 0' INT
+
+    # Start reading output in background
+    cat "$FIFO_OUT" &
+    local reader_pid=$!
+
+    # Read input and send to server
+    while IFS= read -r line; do
+        echo "$line" > "$FIFO_IN"
+    done
+
+    kill $reader_pid 2>/dev/null || true
+}
+
+# Send a command to the server
+do_send() {
+    local server_dir="$1"
+    local command="$2"
+    get_paths "$server_dir"
+
+    if ! is_running "$server_dir"; then
+        echo "Server is not running"
+        exit 1
+    fi
+
+    echo "$command" > "$FIFO_IN"
+    echo "Sent: $command"
+}
+
+# Show server status
+do_status() {
+    local server_dir="$1"
+    get_paths "$server_dir"
+
+    if is_running "$server_dir"; then
+        echo "Running (PID: $(cat "$PID_FILE"))"
+        echo "Socket: $SOCKET_PATH"
+        echo "Log: $LOG_FILE"
+        exit 0
+    else
+        echo "Not running"
+        exit 1
+    fi
+}
+
+# Stop the server gracefully
+do_stop() {
+    local server_dir="$1"
+    get_paths "$server_dir"
+
+    if ! is_running "$server_dir"; then
+        echo "Server is not running"
+        exit 1
+    fi
+
+    echo "Sending stop command..."
+    echo "stop" > "$FIFO_IN"
+
+    # Wait for server to stop
+    local timeout=30
+    while (( timeout > 0 )) && is_running "$server_dir"; do
+        sleep 1
+        (( timeout-- ))
+    done
+
+    if is_running "$server_dir"; then
+        echo "Server did not stop gracefully, killing..."
+        local pid
+        pid=$(cat "$PID_FILE")
+        kill -9 "$pid" 2>/dev/null || true
+    fi
+
+    echo "Server stopped"
+}
+
+# Show log
+do_log() {
+    local server_dir="$1"
+    local lines="${2:-100}"
+    get_paths "$server_dir"
+
+    if [[ -f "$LOG_FILE" ]]; then
+        tail -n "$lines" "$LOG_FILE"
+    else
+        echo "No log file found"
+        exit 1
+    fi
+}
+
+# Main command dispatch
+main() {
+    if [[ $# -lt 2 ]]; then
+        echo "Usage: mc-wrapper <command> <server-dir> [args...]"
+        echo ""
+        echo "Commands:"
+        echo "  start <server-dir> [java-args...]   Start the server"
+        echo "  attach <server-dir>                 Attach to running server"
+        echo "  send <server-dir> <command>         Send command to server"
+        echo "  status <server-dir>                 Check if server is running"
+        echo "  stop <server-dir>                   Send 'stop' command"
+        echo "  log <server-dir> [lines]            Show last N lines of log"
+        exit 1
+    fi
+
+    local cmd="$1"
+    local server_dir
+    server_dir=$(realpath "$2")
+    shift 2
+
+    case "$cmd" in
+        start)
+            do_start "$server_dir" "$@"
+            ;;
+        attach)
+            do_attach "$server_dir"
+            ;;
+        send)
+            if [[ $# -lt 1 ]]; then
+                echo "Usage: mc-wrapper send <server-dir> <command>"
+                exit 1
+            fi
+            do_send "$server_dir" "$*"
+            ;;
+        status)
+            do_status "$server_dir"
+            ;;
+        stop)
+            do_stop "$server_dir"
+            ;;
+        log)
+            do_log "$server_dir" "${1:-100}"
+            ;;
+        *)
+            echo "Unknown command: $cmd"
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"

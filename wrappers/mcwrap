@@ -1,0 +1,393 @@
+#!/bin/bash
+#
+# mcwrap - Simple Minecraft server wrapper for session persistence
+#
+# A lightweight wrapper that provides:
+#   - Session persistence (server survives SSH disconnects)
+#   - Reattachment via tail + input pipe
+#   - Scrollback history in log file
+#   - Full truecolor support (24-bit RGB preserved in logs)
+#
+# No dependencies beyond coreutils. Works on any Linux system.
+#
+# Usage:
+#   mcwrap start <server-dir>           Start server in background
+#   mcwrap attach <server-dir>          Attach to console (interactive)
+#   mcwrap send <server-dir> <cmd>      Send command
+#   mcwrap status <server-dir>          Check status
+#   mcwrap stop <server-dir>            Stop gracefully
+#   mcwrap log <server-dir> [N]         Show last N lines
+#   mcwrap tail <server-dir>            Follow log (read-only)
+#
+# Truecolor notes:
+#   - ANSI escape codes (including 24-bit RGB) are preserved in logs
+#   - Cursor control codes are filtered to keep logs clean
+#   - MCPanel's SwiftTerm renders colors correctly from tail output
+#
+
+set -euo pipefail
+
+# Configuration
+WRAP_DIR="${MCWRAP_DIR:-$HOME/.mcwrap}"
+LOG_LINES="${MCWRAP_LOG_LINES:-50000}"
+
+# Filter problematic escape sequences while preserving colors
+# Removes: cursor movement, screen clear, cursor show/hide
+# Keeps: SGR color codes (including truecolor \e[38;2;r;g;bm)
+filter_output() {
+    sed -u \
+        -e 's/\x1b\[[0-9;]*[HfABCDEFGJKsu]//g' \
+        -e 's/\x1b\[?[0-9]*[hl]//g' \
+        -e 's/\x1b\[[0-9]*X//g' \
+        -e 's/\r$//g' \
+        -e 's/\r\([^\n]\)/\n\1/g'
+}
+
+# Get paths for a server
+paths() {
+    local dir="$1"
+    local id
+    id=$(echo "$dir" | md5sum | cut -c1-12)
+
+    export WRAP_SOCK="$WRAP_DIR/$id"
+    export WRAP_PID="$WRAP_SOCK/pid"
+    export WRAP_LOG="$WRAP_SOCK/console.log"
+    export WRAP_IN="$WRAP_SOCK/input"
+    export WRAP_NAME=$(basename "$dir")
+}
+
+init() {
+    mkdir -p "$WRAP_DIR"
+}
+
+running() {
+    [[ -f "$WRAP_PID" ]] && kill -0 "$(cat "$WRAP_PID")" 2>/dev/null
+}
+
+cmd_start() {
+    local dir="$1"
+    shift
+    paths "$dir"
+    init
+
+    if running; then
+        echo "Already running (PID $(cat "$WRAP_PID"))"
+        return 1
+    fi
+
+    # Clean up
+    rm -rf "$WRAP_SOCK"
+    mkdir -p "$WRAP_SOCK"
+
+    # Create input pipe
+    mkfifo "$WRAP_IN"
+    chmod 600 "$WRAP_IN"
+
+    # Find JAR
+    cd "$dir"
+    local jar
+    jar=$(ls -1 *.jar 2>/dev/null | head -1) || true
+
+    if [[ -z "$jar" ]]; then
+        echo "No JAR file found in $dir"
+        rm -rf "$WRAP_SOCK"
+        return 1
+    fi
+
+    # Java args
+    local args=("$@")
+    if [[ ${#args[@]} -eq 0 ]]; then
+        args=(-Xms2G -Xmx4G -jar "$jar" --nogui)
+    fi
+
+    echo "Starting $WRAP_NAME..."
+    echo "  JAR: $jar"
+    echo "  Log: $WRAP_LOG"
+
+    # Launch wrapper in background
+    # Use nohup and explicit bash without errexit to ensure process persists
+    nohup bash -c '
+        set +e  # Disable errexit in this subshell
+        cd "'"$dir"'"
+        export TERM=xterm-256color
+        export COLORTERM=truecolor
+
+        WRAP_SOCK="'"$WRAP_SOCK"'"
+        WRAP_PID="'"$WRAP_PID"'"
+        WRAP_LOG="'"$WRAP_LOG"'"
+        WRAP_IN="'"$WRAP_IN"'"
+        LOG_LINES="'"$LOG_LINES"'"
+
+        # Write PID of this wrapper process
+        echo $$ > "$WRAP_PID"
+
+        # Cleanup on exit
+        cleanup() { rm -rf "$WRAP_SOCK"; }
+        trap cleanup EXIT
+
+        # Keep input pipe open for writing
+        exec 3<>"$WRAP_IN"
+
+        # Run Java with truecolor support
+        # Output goes to log file (preserving ANSI colors)
+        java -Dnet.kyori.ansi.colorLevel=truecolor '"${args[*]}"' \
+            <&3 2>&1 | while IFS= read -r line; do
+            echo "$line" >> "$WRAP_LOG"
+        done
+    ' </dev/null >/dev/null 2>&1 &
+
+    disown
+
+    sleep 1
+    if running; then
+        echo "Started (PID $(cat "$WRAP_PID"))"
+    else
+        echo "Failed to start"
+        return 1
+    fi
+}
+
+cmd_attach() {
+    local dir="$1"
+    local raw="${2:-}"
+    paths "$dir"
+
+    if ! running; then
+        echo "Not running"
+        return 1
+    fi
+
+    # Raw mode: just pipe I/O with no decoration (for MCPanel)
+    if [[ "$raw" == "--raw" ]]; then
+        trap 'exit 0' INT TERM
+        tail -n 0 -f "$WRAP_LOG" 2>/dev/null &
+        local tail_pid=$!
+        while IFS= read -r cmd; do
+            echo "$cmd" > "$WRAP_IN"
+        done
+        kill "$tail_pid" 2>/dev/null || true
+        return 0
+    fi
+
+    echo "Attached to $WRAP_NAME (Ctrl+C to detach)"
+    echo "─────────────────────────────────────────"
+
+    # Show recent history (with colors!)
+    [[ -f "$WRAP_LOG" ]] && tail -n 30 "$WRAP_LOG"
+
+    echo "─────────────────────────────────────────"
+
+    # Detach cleanly on Ctrl+C
+    trap 'echo -e "\nDetached."; exit 0' INT TERM
+
+    # Follow log in background
+    tail -n 0 -f "$WRAP_LOG" 2>/dev/null &
+    local tail_pid=$!
+
+    # Read commands and send to pipe
+    while IFS= read -r cmd; do
+        echo "$cmd" > "$WRAP_IN"
+    done
+
+    kill "$tail_pid" 2>/dev/null || true
+}
+
+# Stream history + live output (for MCPanel initial load)
+cmd_stream() {
+    local dir="$1"
+    local history_lines="${2:-500}"
+    paths "$dir"
+
+    if ! running; then
+        echo "Not running"
+        return 1
+    fi
+
+    # Output history first, then follow live
+    # This gives MCPanel scrollback + live updates in one stream
+    if [[ -f "$WRAP_LOG" ]]; then
+        tail -n "$history_lines" "$WRAP_LOG"
+    fi
+
+    # Now follow live (MCPanel reads this continuously)
+    exec tail -n 0 -f "$WRAP_LOG"
+}
+
+cmd_send() {
+    local dir="$1"
+    shift
+    local cmd="$*"
+    paths "$dir"
+
+    if ! running; then
+        echo "Not running"
+        return 1
+    fi
+
+    echo "$cmd" > "$WRAP_IN"
+    echo "→ $cmd"
+}
+
+cmd_status() {
+    local dir="$1"
+    paths "$dir"
+
+    if running; then
+        echo "● $WRAP_NAME running"
+        echo "  PID: $(cat "$WRAP_PID")"
+        echo "  Log: $WRAP_LOG"
+        [[ -f "$WRAP_LOG" ]] && echo "  Lines: $(wc -l < "$WRAP_LOG")"
+    else
+        echo "○ $WRAP_NAME stopped"
+        return 1
+    fi
+}
+
+cmd_stop() {
+    local dir="$1"
+    paths "$dir"
+
+    if ! running; then
+        echo "Not running"
+        return 1
+    fi
+
+    echo "Stopping $WRAP_NAME..."
+    echo "stop" > "$WRAP_IN"
+
+    # Wait up to 30s
+    for i in {1..30}; do
+        if ! running; then
+            echo "Stopped"
+            return 0
+        fi
+        sleep 1
+        echo -n "."
+    done
+
+    echo
+    echo "Force killing..."
+    kill -9 "$(cat "$WRAP_PID")" 2>/dev/null || true
+    rm -rf "$WRAP_SOCK"
+    echo "Killed"
+}
+
+cmd_log() {
+    local dir="$1"
+    local n="${2:-100}"
+    paths "$dir"
+
+    if [[ -f "$WRAP_LOG" ]]; then
+        tail -n "$n" "$WRAP_LOG"
+    else
+        echo "No log file"
+        return 1
+    fi
+}
+
+cmd_tail() {
+    local dir="$1"
+    paths "$dir"
+
+    if ! running; then
+        echo "Not running"
+        return 1
+    fi
+
+    echo "Following $WRAP_NAME (Ctrl+C to stop)..."
+    tail -f "$WRAP_LOG"
+}
+
+cmd_list() {
+    echo "Managed servers:"
+    for sock in "$WRAP_DIR"/*/pid; do
+        [[ -f "$sock" ]] || continue
+        local pid
+        pid=$(cat "$sock")
+        local name
+        name=$(basename "$(dirname "$sock")")
+        if kill -0 "$pid" 2>/dev/null; then
+            echo "  ● $name (PID $pid)"
+        else
+            echo "  ○ $name (stale)"
+        fi
+    done
+}
+
+# Main
+main() {
+    case "${1:-help}" in
+        start)
+            [[ $# -ge 2 ]] || { echo "Usage: mcwrap start <dir> [java-args]"; exit 1; }
+            cmd_start "$(realpath "$2")" "${@:3}"
+            ;;
+        attach)
+            [[ $# -ge 2 ]] || { echo "Usage: mcwrap attach <dir> [--raw]"; exit 1; }
+            cmd_attach "$(realpath "$2")" "${3:-}"
+            ;;
+        stream)
+            [[ $# -ge 2 ]] || { echo "Usage: mcwrap stream <dir> [history-lines]"; exit 1; }
+            cmd_stream "$(realpath "$2")" "${3:-500}"
+            ;;
+        send)
+            [[ $# -ge 3 ]] || { echo "Usage: mcwrap send <dir> <command>"; exit 1; }
+            cmd_send "$(realpath "$2")" "${@:3}"
+            ;;
+        status)
+            [[ $# -ge 2 ]] || { echo "Usage: mcwrap status <dir>"; exit 1; }
+            cmd_status "$(realpath "$2")"
+            ;;
+        stop)
+            [[ $# -ge 2 ]] || { echo "Usage: mcwrap stop <dir>"; exit 1; }
+            cmd_stop "$(realpath "$2")"
+            ;;
+        log)
+            [[ $# -ge 2 ]] || { echo "Usage: mcwrap log <dir> [lines]"; exit 1; }
+            cmd_log "$(realpath "$2")" "${3:-100}"
+            ;;
+        tail)
+            [[ $# -ge 2 ]] || { echo "Usage: mcwrap tail <dir>"; exit 1; }
+            cmd_tail "$(realpath "$2")"
+            ;;
+        list|ls)
+            cmd_list
+            ;;
+        help|--help|-h|*)
+            cat <<'EOF'
+mcwrap - Simple Minecraft server wrapper
+
+Usage: mcwrap <command> <server-dir> [args...]
+
+Commands:
+  start <dir> [java-args]   Start server (backgrounded, persists)
+  attach <dir> [--raw]      Interactive console (--raw for MCPanel)
+  stream <dir> [N]          Output N history lines + follow (for MCPanel)
+  tail <dir>                Follow log (output only)
+  send <dir> <command>      Send single command
+  status <dir>              Show status
+  stop <dir>                Graceful shutdown
+  log <dir> [N]             Show last N lines (default: 100)
+  list                      List all managed servers
+
+Environment:
+  MCWRAP_DIR          State directory (default: ~/.mcwrap)
+  MCWRAP_LOG_LINES    Max log lines (default: 50000)
+
+Example:
+  mcwrap start /opt/minecraft
+  mcwrap attach /opt/minecraft
+  mcwrap send /opt/minecraft "say Hello!"
+  mcwrap stop /opt/minecraft
+
+Features:
+  ✓ Session persistence (survives SSH disconnect)
+  ✓ Reattachment to running server
+  ✓ Scrollback history in log file
+  ✓ Truecolor support (24-bit RGB)
+  ✓ No dependencies (pure bash)
+EOF
+            ;;
+    esac
+}
+
+main "$@"
