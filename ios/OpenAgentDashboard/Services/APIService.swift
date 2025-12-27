@@ -80,7 +80,12 @@ final class APIService {
     var isAuthenticated: Bool {
         jwtToken != nil
     }
-    
+
+    /// Returns the current JWT token for WebSocket authentication
+    var currentToken: String? {
+        jwtToken
+    }
+
     var authRequired: Bool = false
     
     

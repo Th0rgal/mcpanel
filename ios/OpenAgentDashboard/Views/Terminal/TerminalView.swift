@@ -236,8 +236,8 @@ struct TerminalView: View {
         
         var request = URLRequest(url: wsURL)
         
-        // Add auth via subprotocol if available
-        if let token = UserDefaults.standard.string(forKey: "jwt_token") {
+        // Add auth via subprotocol if available (read from Keychain via APIService)
+        if let token = APIService.shared.currentToken {
             request.setValue("openagent, jwt.\(token)", forHTTPHeaderField: "Sec-WebSocket-Protocol")
         }
         
