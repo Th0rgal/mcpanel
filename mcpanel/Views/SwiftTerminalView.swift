@@ -16,9 +16,8 @@ struct SwiftTerminalView: NSViewRepresentable {
     @Binding var isConnected: Bool
     var onSendData: ((Data) -> Void)?
     var onResize: ((Int, Int) -> Void)?  // cols, rows
-    /// Return true to consume the scroll event (useful for tmux/screen where we want to
-    /// drive remote scrolling rather than local scrollback).
-    var onScrollWheelDeltaY: ((CGFloat) -> Bool)?
+    /// Called when user scrolls - return true to consume the event (for remote scrollback)
+    var onScrollWheel: ((CGFloat) -> Bool)?
     var size: CGSize  // Explicit size from GeometryReader
 
     // Reference to allow external data feeding
@@ -36,9 +35,9 @@ struct SwiftTerminalView: NSViewRepresentable {
 
         container.addSubview(terminal)
 
-        // Wire terminal reference for event monitoring (scroll wheel, etc.)
+        // Store terminal reference for coordinator
         context.coordinator.terminalView = terminal
-        context.coordinator.installScrollMonitorIfNeeded()
+        context.coordinator.installScrollMonitor()
 
         // Store reference for external data feeding
         DispatchQueue.main.async {
@@ -52,12 +51,11 @@ struct SwiftTerminalView: NSViewRepresentable {
         // Update callbacks
         context.coordinator.onSendData = onSendData
         context.coordinator.onResize = onResize
-        context.coordinator.onScrollWheelDeltaY = onScrollWheelDeltaY
+        context.coordinator.onScrollWheel = onScrollWheel
 
         // Get the terminal view from container
         guard let terminal = nsView.subviews.first as? TerminalView else { return }
         context.coordinator.terminalView = terminal
-        context.coordinator.installScrollMonitorIfNeeded()
 
         // Update frame when size changes
         if nsView.frame.size != size && size.width > 0 && size.height > 0 {
@@ -96,8 +94,8 @@ struct SwiftTerminalView: NSViewRepresentable {
 
         // Increase scrollback buffer significantly (default is 500)
         // This enables smooth native scrolling through terminal history
+        // Note: This only affects future buffer allocations, existing content is preserved
         terminal.getTerminal().options.scrollback = 10000
-        terminal.getTerminal().resetNormalBuffer()
     }
 
     // MARK: - Coordinator
@@ -106,7 +104,7 @@ struct SwiftTerminalView: NSViewRepresentable {
         var parent: SwiftTerminalView
         var onSendData: ((Data) -> Void)?
         var onResize: ((Int, Int) -> Void)?
-        var onScrollWheelDeltaY: ((CGFloat) -> Bool)?
+        var onScrollWheel: ((CGFloat) -> Bool)?
 
         weak var terminalView: TerminalView?
         private var scrollMonitor: Any?
@@ -115,40 +113,38 @@ struct SwiftTerminalView: NSViewRepresentable {
             self.parent = parent
             self.onSendData = parent.onSendData
             self.onResize = parent.onResize
-            self.onScrollWheelDeltaY = parent.onScrollWheelDeltaY
+            self.onScrollWheel = parent.onScrollWheel
         }
 
         deinit {
-            uninstallScrollMonitor()
+            if let monitor = scrollMonitor {
+                NSEvent.removeMonitor(monitor)
+            }
         }
 
-        func installScrollMonitorIfNeeded() {
+        /// Install scroll wheel monitor to intercept scroll events for remote scrollback
+        func installScrollMonitor() {
             guard scrollMonitor == nil else { return }
             scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
                 guard let self,
                       let terminalView = self.terminalView,
                       let window = terminalView.window,
-                      let eventWindow = event.window,
-                      eventWindow === window else {
+                      event.window === window else {
                     return event
                 }
 
-                // Only intercept scroll if the cursor is over the terminal view.
+                // Only intercept if cursor is over terminal
                 let point = terminalView.convert(event.locationInWindow, from: nil)
                 guard terminalView.bounds.contains(point) else { return event }
 
-                let deltaY = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.deltaY
-                if let handler = self.onScrollWheelDeltaY, handler(deltaY) {
-                    return nil
-                }
-                return event
-            }
-        }
+                // Get scroll delta
+                let deltaY = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.deltaY * 3
 
-        private func uninstallScrollMonitor() {
-            if let scrollMonitor {
-                NSEvent.removeMonitor(scrollMonitor)
-                self.scrollMonitor = nil
+                // Let handler decide whether to consume the event
+                if let handler = self.onScrollWheel, handler(deltaY) {
+                    return nil  // Consumed - don't pass to SwiftTerm
+                }
+                return event  // Pass through to SwiftTerm's native scrollback
             }
         }
 
@@ -264,7 +260,7 @@ struct SwiftTermConsoleView: View {
                 onResize: { cols, rows in
                     handleResize(cols: cols, rows: rows)
                 },
-                onScrollWheelDeltaY: { deltaY in
+                onScrollWheel: { deltaY in
                     handleScrollWheel(deltaY: deltaY)
                 },
                 size: geometry.size,
@@ -355,10 +351,64 @@ struct SwiftTermConsoleView: View {
         }
     }
 
+    // MARK: - Scroll Handling
+
+    // Accumulated scroll delta for smooth scrolling
+    @State private var scrollAccumulator: CGFloat = 0
+    @State private var isInCopyMode = false
+    @State private var lastScrollTime: Date = .distantPast
+
     private func handleScrollWheel(deltaY: CGFloat) -> Bool {
-        // Let SwiftTerm handle scrollback natively - it's smoother and has larger buffer (10k lines)
-        // The tmux smcup@:rmcup@ override disables alternate screen, so scrollback works
-        return false
+        guard let server = serverManager.selectedServer else { return false }
+
+        // Only intercept for tmux/screen sessions (they use alternate screen with no scrollback)
+        switch server.consoleMode {
+        case .ptyTmux, .ptyScreen:
+            break
+        default:
+            // Let SwiftTerm handle native scrollback for other modes
+            return false
+        }
+
+        // Throttle: accumulate delta and send commands periodically
+        scrollAccumulator += deltaY
+
+        // Need at least ~3 units of scroll to trigger a line
+        let threshold: CGFloat = 3.0
+        guard abs(scrollAccumulator) >= threshold else { return true }
+
+        let lines = Int(scrollAccumulator / threshold)
+        scrollAccumulator = scrollAccumulator.truncatingRemainder(dividingBy: threshold)
+
+        guard lines != 0 else { return true }
+
+        Task {
+            // Enter copy mode if not already (tmux: Ctrl+B [, screen: Ctrl+A Esc)
+            let now = Date()
+            let timeSinceLastScroll = now.timeIntervalSince(lastScrollTime)
+            await MainActor.run { lastScrollTime = now }
+
+            // Re-enter copy mode if it's been a while (copy mode may have exited)
+            if timeSinceLastScroll > 2.0 || !isInCopyMode {
+                await MainActor.run { isInCopyMode = true }
+                if server.consoleMode == .ptyTmux {
+                    await serverManager.sendPTYRaw("\u{02}[", to: server)  // Ctrl+B [
+                } else {
+                    await serverManager.sendPTYRaw("\u{01}\u{1B}", to: server)  // Ctrl+A Esc
+                }
+                // Small delay to let copy mode activate
+                try? await Task.sleep(nanoseconds: 50_000_000)  // 50ms
+            }
+
+            // Send arrow keys for smooth line-by-line scrolling
+            let key: SpecialKey = lines > 0 ? .up : .down
+            let count = abs(lines)
+            for _ in 0..<min(count, 10) {  // Cap at 10 lines per scroll event
+                await serverManager.sendPTYKey(key, to: server)
+            }
+        }
+
+        return true  // Consume the event
     }
 }
 
