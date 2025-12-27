@@ -16,6 +16,9 @@ struct SwiftTerminalView: NSViewRepresentable {
     @Binding var isConnected: Bool
     var onSendData: ((Data) -> Void)?
     var onResize: ((Int, Int) -> Void)?  // cols, rows
+    /// Return true to consume the scroll event (useful for tmux/screen where we want to
+    /// drive remote scrolling rather than local scrollback).
+    var onScrollWheelDeltaY: ((CGFloat) -> Bool)?
     var size: CGSize  // Explicit size from GeometryReader
 
     // Reference to allow external data feeding
@@ -33,6 +36,10 @@ struct SwiftTerminalView: NSViewRepresentable {
 
         container.addSubview(terminal)
 
+        // Wire terminal reference for event monitoring (scroll wheel, etc.)
+        context.coordinator.terminalView = terminal
+        context.coordinator.installScrollMonitorIfNeeded()
+
         // Store reference for external data feeding
         DispatchQueue.main.async {
             self.terminalRef = SwiftTerminalController(terminalView: terminal)
@@ -45,9 +52,12 @@ struct SwiftTerminalView: NSViewRepresentable {
         // Update callbacks
         context.coordinator.onSendData = onSendData
         context.coordinator.onResize = onResize
+        context.coordinator.onScrollWheelDeltaY = onScrollWheelDeltaY
 
         // Get the terminal view from container
         guard let terminal = nsView.subviews.first as? TerminalView else { return }
+        context.coordinator.terminalView = terminal
+        context.coordinator.installScrollMonitorIfNeeded()
 
         // Update frame when size changes
         if nsView.frame.size != size && size.width > 0 && size.height > 0 {
@@ -91,11 +101,50 @@ struct SwiftTerminalView: NSViewRepresentable {
         var parent: SwiftTerminalView
         var onSendData: ((Data) -> Void)?
         var onResize: ((Int, Int) -> Void)?
+        var onScrollWheelDeltaY: ((CGFloat) -> Bool)?
+
+        weak var terminalView: TerminalView?
+        private var scrollMonitor: Any?
 
         init(_ parent: SwiftTerminalView) {
             self.parent = parent
             self.onSendData = parent.onSendData
             self.onResize = parent.onResize
+            self.onScrollWheelDeltaY = parent.onScrollWheelDeltaY
+        }
+
+        deinit {
+            uninstallScrollMonitor()
+        }
+
+        func installScrollMonitorIfNeeded() {
+            guard scrollMonitor == nil else { return }
+            scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                guard let self,
+                      let terminalView = self.terminalView,
+                      let window = terminalView.window,
+                      let eventWindow = event.window,
+                      eventWindow === window else {
+                    return event
+                }
+
+                // Only intercept scroll if the cursor is over the terminal view.
+                let point = terminalView.convert(event.locationInWindow, from: nil)
+                guard terminalView.bounds.contains(point) else { return event }
+
+                let deltaY = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.deltaY
+                if let handler = self.onScrollWheelDeltaY, handler(deltaY) {
+                    return nil
+                }
+                return event
+            }
+        }
+
+        private func uninstallScrollMonitor() {
+            if let scrollMonitor {
+                NSEvent.removeMonitor(scrollMonitor)
+                self.scrollMonitor = nil
+            }
         }
 
         // Called when user types - send to PTY
@@ -210,6 +259,9 @@ struct SwiftTermConsoleView: View {
                 onResize: { cols, rows in
                     handleResize(cols: cols, rows: rows)
                 },
+                onScrollWheelDeltaY: { deltaY in
+                    handleScrollWheel(deltaY: deltaY)
+                },
                 size: geometry.size,
                 terminalRef: $terminalController
             )
@@ -296,6 +348,48 @@ struct SwiftTermConsoleView: View {
         Task {
             await serverManager.resizePTY(for: server, cols: cols, rows: rows)
         }
+    }
+
+    private func handleScrollWheel(deltaY: CGFloat) -> Bool {
+        guard deltaY != 0,
+              let server = serverManager.selectedServer else { return false }
+
+        // For tmux/screen sessions, drive remote scrolling rather than SwiftTerm's local scrollback.
+        // This works even when the terminal is in the alternate screen buffer.
+        switch server.consoleMode {
+        case .ptyTmux:
+            let repeats = scrollRepeats(for: deltaY)
+            let key: SpecialKey = deltaY > 0 ? .pageUp : .pageDown
+            Task {
+                // Enter tmux copy-mode (default prefix Ctrl+B then '['), then page.
+                await serverManager.sendPTYRaw("\u{02}[", to: server)
+                for _ in 0..<repeats {
+                    await serverManager.sendPTYKey(key, to: server)
+                }
+            }
+            return true
+        case .ptyScreen:
+            let repeats = scrollRepeats(for: deltaY)
+            let key: SpecialKey = deltaY > 0 ? .pageUp : .pageDown
+            Task {
+                // Enter screen copy-mode (default prefix Ctrl+A then Esc), then page.
+                await serverManager.sendPTYRaw("\u{01}\u{1B}", to: server)
+                for _ in 0..<repeats {
+                    await serverManager.sendPTYKey(key, to: server)
+                }
+            }
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func scrollRepeats(for deltaY: CGFloat) -> Int {
+        let absDelta = abs(deltaY)
+        if absDelta > 14 { return 4 }
+        if absDelta > 9 { return 3 }
+        if absDelta > 5 { return 2 }
+        return 1
     }
 }
 

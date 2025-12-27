@@ -361,6 +361,29 @@ class ServerManager: ObservableObject {
             servers[index].status = .stopping
         }
 
+        // Prefer sending stop via the live console so the user can see the shutdown happen.
+        // This also avoids requiring systemctl permissions in some setups.
+        if ptyConnected[server.id] == true {
+            await sendPTYCommand("stop", to: server)
+        } else {
+            // Fall back to whichever mechanism is available (RCON/screen/tmux auto-detect).
+            do {
+                try await ssh.sendCommand("stop")
+            } catch {
+                // We'll still try the more forceful stop path below.
+                print("[Stop] Failed to send stop command: \(error)")
+            }
+        }
+
+        // Give the server some time to shut down gracefully.
+        for _ in 0..<30 {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            await refreshServerStatus(server)
+            if let updated = servers.first(where: { $0.id == server.id }), updated.status == .offline {
+                return
+            }
+        }
+
         do {
             try await ssh.stopServer()
             try? await Task.sleep(nanoseconds: 2_000_000_000)
@@ -372,23 +395,34 @@ class ServerManager: ObservableObject {
     }
 
     func restartServer(_ server: Server) async {
-        let ssh = sshService(for: server)
-
         if let index = servers.firstIndex(where: { $0.id == server.id }) {
             servers[index].status = .stopping
         }
 
-        do {
-            try await ssh.restartServer()
-            if let index = servers.firstIndex(where: { $0.id == server.id }) {
-                servers[index].status = .starting
+        // Prefer the in-console restart command so the user sees it, and it works even without systemctl.
+        // (Paper/Spigot commonly support a `restart` console command via restart scripts.)
+        if ptyConnected[server.id] == true {
+            await sendPTYCommand("restart", to: server)
+        } else {
+            let ssh = sshService(for: server)
+            do {
+                try await ssh.sendCommand("restart")
+            } catch {
+                // Fall back to systemd restart if configured
+                do {
+                    try await ssh.restartServer()
+                } catch {
+                    errorMessage = error.localizedDescription
+                }
             }
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            await refreshServerStatus(server)
-        } catch {
-            errorMessage = error.localizedDescription
-            await refreshServerStatus(server)
         }
+
+        // Reflect that we're restarting and refresh status a bit later.
+        if let index = servers.firstIndex(where: { $0.id == server.id }) {
+            servers[index].status = .starting
+        }
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        await refreshServerStatus(server)
     }
 
     // MARK: - Console
