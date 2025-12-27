@@ -6,11 +6,18 @@
 //
 
 import SwiftUI
+import AppKit
 
 struct FileBrowserView: View {
     @EnvironmentObject var serverManager: ServerManager
     @State private var selectedFile: FileItem?
     @State private var showHiddenFiles = false
+    @State private var fileToDelete: FileItem?
+    @State private var showDeleteConfirmation = false
+    @State private var isDownloading = false
+    @State private var isDeleting = false
+    @State private var operationError: String?
+    @State private var showErrorAlert = false
 
     var filteredFiles: [FileItem] {
         var files = serverManager.selectedServerFiles
@@ -40,6 +47,33 @@ struct FileBrowserView: View {
                 Task {
                     await serverManager.loadFiles(for: server)
                 }
+            }
+        }
+        .alert("Delete \(fileToDelete?.isDirectory == true ? "Folder" : "File")?", isPresented: $showDeleteConfirmation) {
+            Button("Cancel", role: .cancel) {
+                fileToDelete = nil
+            }
+            Button("Delete", role: .destructive) {
+                if let file = fileToDelete {
+                    performDelete(file)
+                }
+            }
+        } message: {
+            if let file = fileToDelete {
+                if file.isDirectory {
+                    Text("Are you sure you want to delete the folder \"\(file.name)\" and all its contents? This cannot be undone.")
+                } else {
+                    Text("Are you sure you want to delete \"\(file.name)\"? This cannot be undone.")
+                }
+            }
+        }
+        .alert("Error", isPresented: $showErrorAlert) {
+            Button("OK", role: .cancel) {
+                operationError = nil
+            }
+        } message: {
+            if let error = operationError {
+                Text(error)
             }
         }
     }
@@ -86,19 +120,31 @@ struct FileBrowserView: View {
                     }
             }
 
-            // Current path
+            // Current path (clickable breadcrumbs)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
-                    ForEach(pathComponents, id: \.self) { component in
+                    ForEach(Array(pathComponents.enumerated()), id: \.offset) { index, component in
                         HStack(spacing: 4) {
-                            Text(component)
-                                .font(.system(size: 13))
-                                .foregroundColor(.primary)
+                            Button {
+                                navigateToPathComponent(at: index)
+                            } label: {
+                                Text(component)
+                                    .font(.system(size: 13))
+                                    .foregroundColor(index == pathComponents.count - 1 ? .primary : .secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .onHover { isHovered in
+                                if isHovered && index < pathComponents.count - 1 {
+                                    NSCursor.pointingHand.push()
+                                } else {
+                                    NSCursor.pop()
+                                }
+                            }
 
-                            if component != pathComponents.last {
+                            if index < pathComponents.count - 1 {
                                 Image(systemName: "chevron.right")
                                     .font(.system(size: 10))
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(.secondary.opacity(0.6))
                             }
                         }
                     }
@@ -258,6 +304,16 @@ struct FileBrowserView: View {
         }
     }
 
+    private func navigateToPathComponent(at index: Int) {
+        // Don't navigate if clicking on the last (current) component
+        guard index < pathComponents.count - 1 else { return }
+
+        // Build the path up to and including the clicked component
+        let componentsToInclude = Array(pathComponents.prefix(index + 1))
+        let targetPath = "/" + componentsToInclude.joined(separator: "/")
+        navigateTo(targetPath)
+    }
+
     private func refreshFiles() {
         guard let server = serverManager.selectedServer else { return }
         Task {
@@ -266,11 +322,93 @@ struct FileBrowserView: View {
     }
 
     private func downloadFile(_ file: FileItem) {
-        // TODO: Implement file download
+        guard let server = serverManager.selectedServer else { return }
+
+        if file.isDirectory {
+            // For directories, use folder picker
+            let panel = NSOpenPanel()
+            panel.canChooseFiles = false
+            panel.canChooseDirectories = true
+            panel.canCreateDirectories = true
+            panel.allowsMultipleSelection = false
+            panel.message = "Choose where to save \"\(file.name)\""
+            panel.prompt = "Save Here"
+
+            panel.begin { response in
+                guard response == .OK, let url = panel.url else { return }
+                let destinationPath = url.appendingPathComponent(file.name).path
+
+                isDownloading = true
+                Task {
+                    defer { isDownloading = false }
+                    let ssh = serverManager.sshService(for: server)
+                    do {
+                        try await ssh.downloadDirectory(remotePath: file.path, localPath: destinationPath)
+                        // Open in Finder
+                        NSWorkspace.shared.selectFile(destinationPath, inFileViewerRootedAtPath: url.path)
+                    } catch {
+                        operationError = "Failed to download folder: \(error.localizedDescription)"
+                        showErrorAlert = true
+                    }
+                }
+            }
+        } else {
+            // For files, use save panel
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = file.name
+            panel.canCreateDirectories = true
+            panel.message = "Choose where to save \"\(file.name)\""
+
+            panel.begin { response in
+                guard response == .OK, let url = panel.url else { return }
+
+                isDownloading = true
+                Task {
+                    defer { isDownloading = false }
+                    let ssh = serverManager.sshService(for: server)
+                    do {
+                        try await ssh.downloadFile(remotePath: file.path, localPath: url.path)
+                        // Open in Finder
+                        NSWorkspace.shared.selectFile(url.path, inFileViewerRootedAtPath: url.deletingLastPathComponent().path)
+                    } catch {
+                        operationError = "Failed to download file: \(error.localizedDescription)"
+                        showErrorAlert = true
+                    }
+                }
+            }
+        }
     }
 
     private func deleteFile(_ file: FileItem) {
-        // TODO: Implement file deletion with confirmation
+        fileToDelete = file
+        showDeleteConfirmation = true
+    }
+
+    private func performDelete(_ file: FileItem) {
+        guard let server = serverManager.selectedServer else { return }
+
+        isDeleting = true
+        Task {
+            defer {
+                isDeleting = false
+                fileToDelete = nil
+            }
+
+            let ssh = serverManager.sshService(for: server)
+            do {
+                if file.isDirectory {
+                    // Use rm -rf for directories (efficient, no file-by-file deletion)
+                    try await ssh.deleteDirectory(remotePath: file.path)
+                } else {
+                    try await ssh.deleteFile(remotePath: file.path)
+                }
+                // Refresh the file list
+                await serverManager.loadFiles(for: server, path: serverManager.currentPath)
+            } catch {
+                operationError = "Failed to delete \(file.isDirectory ? "folder" : "file"): \(error.localizedDescription)"
+                showErrorAlert = true
+            }
+        }
     }
 }
 

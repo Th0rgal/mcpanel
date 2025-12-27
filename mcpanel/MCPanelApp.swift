@@ -157,7 +157,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.isReleasedWhenClosed = false
         window.acceptsMouseMovedEvents = true
         window.ignoresMouseEvents = false
-        window.isMovableByWindowBackground = true
+        window.isMovableByWindowBackground = false  // Disabled to allow text selection in console
 
         trafficLights.attach(to: window)
     }
@@ -258,6 +258,27 @@ final class TrafficLightsPositioner {
 }
 
 private var baselineKey: UInt8 = 0
+
+// MARK: - Window Drag Area
+
+/// A view that enables window dragging when clicked and dragged.
+/// Use this to create custom draggable regions (e.g., titlebar areas).
+struct WindowDragArea: NSViewRepresentable {
+    func makeNSView(context: Context) -> WindowDragNSView {
+        WindowDragNSView()
+    }
+
+    func updateNSView(_ nsView: WindowDragNSView, context: Context) {}
+}
+
+/// NSView subclass that initiates window drag on mouse down
+final class WindowDragNSView: NSView {
+    override func mouseDown(with event: NSEvent) {
+        window?.performDrag(with: event)
+    }
+
+    override var mouseDownCanMoveWindow: Bool { true }
+}
 
 // MARK: - Notification Names
 

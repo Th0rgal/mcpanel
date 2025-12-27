@@ -191,9 +191,10 @@ actor PTYService {
             // Just allocate a PTY and drop to shell
             remoteCommand = "cd '\(server.serverPath)' && exec bash"
         case .mcwrap:
-            // mcwrap provides native scrollback + truecolor without alternate screen buffer
+            // mcwrap-pty provides PTY-based console with tab completion support
+            // Fall back to basic mcwrap if mcwrap-pty is not available
             // Use --raw mode for clean I/O (no decoration, just pipe stdin/stdout)
-            remoteCommand = "mcwrap attach '\(server.serverPath)' --raw"
+            remoteCommand = "mcwrap-pty attach '\(server.serverPath)' --raw 2>/dev/null || mcwrap attach '\(server.serverPath)' --raw"
         }
 
         print("[PTYService] Remote command: \(remoteCommand)")

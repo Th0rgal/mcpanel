@@ -280,8 +280,8 @@ extension SSHService {
             }
         }
 
-        // Now start the server via systemd
-        _ = try await execute("systemctl start '\(unit)'")
+        // Restart via systemd (works whether it's running or already stopped)
+        _ = try await execute("systemctl restart '\(unit)'")
     }
 
     /// Get server status details
@@ -350,7 +350,9 @@ extension SSHService {
     /// Stream the server log
     func streamLog() -> AsyncStream<String> {
         let logPath = "\(server.serverPath)/logs/latest.log"
-        return stream("tail -f '\(logPath)'")
+        // Use -F to follow by name (survives log rotation/recreate on restart)
+        // -n 0 avoids replaying old lines when the stream is started after an initial tail load.
+        return stream("tail -n 0 -F '\(logPath)'")
     }
 
     /// Send a command to the Minecraft server via RCON, screen, or tmux
@@ -410,6 +412,25 @@ extension SSHService {
         throw SSHError.commandFailed("No RCON, screen, or tmux session found. Configure RCON password or screen session in server settings.")
     }
 
+    /// Send a command via RCON and return the response
+    /// This is useful for querying server state without affecting the console
+    func sendRCONCommand(_ command: String, password: String, port: Int = 25575, host: String = "127.0.0.1") async throws -> String {
+        let escapedCommand = command.replacingOccurrences(of: "'", with: "'\\''")
+        let escapedPassword = password.replacingOccurrences(of: "'", with: "'\\''")
+
+        // Check if mcrcon is available
+        let mcrconCheck = try? await execute("which mcrcon || which /usr/local/bin/mcrcon")
+        let mcrconPath = mcrconCheck?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        if mcrconPath.isEmpty {
+            // Try to install mcrcon
+            _ = try? await execute("apt-get install -y mcrcon 2>/dev/null || (cd /tmp && rm -rf mcrcon && git clone https://github.com/Tiiffi/mcrcon.git && cd mcrcon && make && cp mcrcon /usr/local/bin/)")
+        }
+
+        let rconCommand = "mcrcon -H '\(host)' -P \(port) -p '\(escapedPassword)' '\(escapedCommand)' 2>/dev/null"
+        return try await execute(rconCommand)
+    }
+
     /// Upload a file via scp
     func uploadFile(localPath: String, remotePath: String) async throws {
         var args: [String] = []
@@ -454,6 +475,15 @@ extension SSHService {
     }
 
     /// Download a file via scp
+    /// Read file contents from remote server via SSH cat command
+    func readFile(at remotePath: String) async throws -> Data {
+        let output = try await execute("cat '\(remotePath)'")
+        guard let data = output.data(using: String.Encoding.utf8) else {
+            throw SSHError.commandFailed("Failed to read file data")
+        }
+        return data
+    }
+
     func downloadFile(remotePath: String, localPath: String) async throws {
         var args: [String] = []
 
@@ -494,5 +524,59 @@ extension SSHService {
             let errorOutput = String(data: errorData, encoding: .utf8) ?? "Unknown error"
             throw SSHError.commandFailed(errorOutput)
         }
+    }
+
+    /// Download a directory recursively via scp -r
+    func downloadDirectory(remotePath: String, localPath: String) async throws {
+        var args: [String] = []
+
+        // Add identity file if specified
+        if let identityFile = server.identityFilePath, !identityFile.isEmpty {
+            let expandedPath = NSString(string: identityFile).expandingTildeInPath
+            args.append(contentsOf: ["-i", expandedPath])
+        }
+
+        // SCP options with recursive flag
+        args.append(contentsOf: [
+            "-r",  // Recursive copy
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=10",
+            "-o", "StrictHostKeyChecking=no"
+        ])
+
+        // Port if non-standard
+        if server.sshPort != 22 {
+            args.append(contentsOf: ["-P", String(server.sshPort)])
+        }
+
+        // Source and destination
+        args.append("\(server.sshUsername)@\(server.host):\(remotePath)")
+        args.append(localPath)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/scp")
+        process.arguments = args
+
+        let errorPipe = Pipe()
+        process.standardError = errorPipe
+
+        try process.run()
+        process.waitUntilExit()
+
+        if process.terminationStatus != 0 {
+            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let errorOutput = String(data: errorData, encoding: .utf8) ?? "Unknown error"
+            throw SSHError.commandFailed(errorOutput)
+        }
+    }
+
+    /// Delete a file on the remote server
+    func deleteFile(remotePath: String) async throws {
+        _ = try await execute("rm '\(remotePath)'")
+    }
+
+    /// Delete a directory recursively on the remote server (rm -rf)
+    func deleteDirectory(remotePath: String) async throws {
+        _ = try await execute("rm -rf '\(remotePath)'")
     }
 }

@@ -34,7 +34,7 @@ struct ServerDetailView: View {
                 SwiftTermConsoleView()
                     .environmentObject(serverManager)
 
-                // Top fade gradient overlay
+                // Top fade gradient overlay (visual only, doesn't block interaction)
                 VStack {
                     LinearGradient(
                         colors: [
@@ -46,15 +46,15 @@ struct ServerDetailView: View {
                         endPoint: .bottom
                     )
                     .frame(height: 40)
-                    .allowsHitTesting(false)
-
                     Spacer()
                 }
+                .allowsHitTesting(false)
 
-                // Floating server controls
+                // Floating server controls (draggable for window movement)
                 floatingServerControls(server)
                     .padding(.top, 12)
                     .padding(.trailing, 12)
+                    .background(WindowDragArea())
             }
         case .plugins:
             PluginsView()
