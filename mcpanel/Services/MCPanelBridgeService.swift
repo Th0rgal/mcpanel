@@ -529,6 +529,23 @@ class MCPanelBridgeService: ObservableObject {
         return nil
     }
 
+    /// Generic string argument types that have unhelpful Brigadier default examples.
+    /// For these types, we show a placeholder instead of the generic examples.
+    private static let genericStringTypes: Set<String> = [
+        "string", "brigadier:string", "greedy_string", "word", "phrase",
+        "greedystring", "words", "message", "text"
+    ]
+
+    /// Check if an argument type is a generic string type (whose examples are not useful)
+    private func isGenericStringType(_ type: String?) -> Bool {
+        guard let type = type else { return false }
+        let lowercased = type.lowercased()
+        // Check exact match or if it contains known generic type names
+        return Self.genericStringTypes.contains(lowercased) ||
+               lowercased.contains("string") ||
+               lowercased.contains("greedy")
+    }
+
     /// Get completions from children nodes.
     /// Shows literal names and argument examples/placeholders.
     private func getCompletionsFromChildren(
@@ -545,7 +562,20 @@ class MCPanelBridgeService: ObservableObject {
             let isArgumentNode = node.isArgument || (key.hasPrefix("<") && key.hasSuffix(">"))
 
             if isArgumentNode {
-                // For arguments, show examples if available
+                // For generic string types, skip examples (they're unhelpful Brigadier defaults
+                // like "word", "and symbols", "words with spaces"). Just show a placeholder.
+                if isGenericStringType(node.type) {
+                    // Only show placeholder when user hasn't started typing
+                    if lowercasedPrefix.isEmpty {
+                        let displayText = node.type ?? key.trimmingCharacters(in: CharacterSet(charactersIn: "<>"))
+                        let tooltip = "Type a \(displayText) value"
+                        completions.append(CompletionPayload.Completion(text: "<\(displayText)>", tooltip: tooltip, hasChildren: hasChildren, isTypeHint: true))
+                    }
+                    // Skip to next child - don't show examples for generic string types
+                    continue
+                }
+
+                // For non-generic arguments, show examples if available
                 if let examples = node.examples, !examples.isEmpty {
                     for example in examples {
                         if example.lowercased().hasPrefix(lowercasedPrefix) {

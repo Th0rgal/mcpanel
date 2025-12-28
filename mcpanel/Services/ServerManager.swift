@@ -45,7 +45,7 @@ enum SidebarSelection: Hashable {
 // MARK: - Detail View Selection
 
 enum DetailTab: String, CaseIterable, Identifiable {
-    case dashboard = "Dashboard"
+    case monitor = "Monitor"
     case console = "Console"
     case plugins = "Plugins"
     case files = "Files"
@@ -56,7 +56,7 @@ enum DetailTab: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
-        case .dashboard: return "gauge.with.dots.needle.bottom.50percent"
+        case .monitor: return "gauge.with.dots.needle.bottom.50percent"
         case .console: return "terminal.fill"
         case .plugins: return "puzzlepiece.extension.fill"
         case .files: return "folder.fill"
@@ -70,7 +70,7 @@ enum DetailTab: String, CaseIterable, Identifiable {
 
 enum PTYConsumer: String, Hashable {
     case console
-    case dashboard
+    case monitor
 }
 
 // MARK: - Server Manager
@@ -81,7 +81,7 @@ class ServerManager: ObservableObject {
 
     @Published var servers: [Server] = []
     @Published var selectedSidebar: SidebarSelection?
-    @Published var selectedTab: DetailTab = .dashboard
+    @Published var selectedTab: DetailTab = .monitor
     @Published var isLoading: Bool = false
     @Published var errorMessage: String?
 
@@ -441,7 +441,7 @@ class ServerManager: ObservableObject {
             of: "\u{1B}\\[[0-9;]*[A-Za-z]|\u{1B}\\][^\u{07}]*\u{07}|\u{1B}[^\\[\\]][A-Za-z]",
             with: "",
             options: .regularExpression
-        ).trimmingCharacters(in: .whitespaces)
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func lineIndicatesServerNotRunning(_ line: String) -> Bool {
@@ -1154,6 +1154,7 @@ class ServerManager: ObservableObject {
                 await MainActor.run {
                     // Split by newlines but preserve the raw output for ANSI parsing
                     let lines = filteredChunk.components(separatedBy: "\n")
+
                     for (index, line) in lines.enumerated() {
                         // Skip empty lines except the last one (might be partial)
                         if line.isEmpty && index < lines.count - 1 { continue }
@@ -1387,6 +1388,11 @@ class ServerManager: ObservableObject {
         // Strip ANSI escape sequences for pattern matching
         let stripped = stripANSIAndTrim(line)
 
+        // Filter completely empty lines
+        if stripped.isEmpty {
+            return true
+        }
+
         // Filter standalone prompt lines (just ">") - these are redundant with our UI prompt
         if stripped == ">" || stripped == "> " {
             return true
@@ -1396,11 +1402,22 @@ class ServerManager: ObservableObject {
         // Covers common formats like:
         // [HH:MM:SS INFO]:, [HH:MM:SS] [Server thread/INFO]:, or bare timestamps.
         let emptyLogPatterns = [
+            // Paper/Spigot style: [HH:MM:SS INFO]:
             #"^\[\d{2}:\d{2}:\d{2}\s+(INFO|WARN|ERROR|DEBUG)\]:?\s*$"#,
+            // Thread style: [HH:MM:SS] [Server thread/INFO]:
             #"^\[\d{2}:\d{2}:\d{2}\]\s*\[[^\]]+/(INFO|WARN|ERROR|DEBUG)\]:?\s*$"#,
+            // Bare timestamp with thread: HH:MM:SS [Thread/INFO]:
             #"^\d{2}:\d{2}:\d{2}\s+\[[^\]]+/(INFO|WARN|ERROR|DEBUG)\]:?\s*$"#,
+            // Bare timestamp in brackets: [HH:MM:SS]
             #"^\[\d{2}:\d{2}:\d{2}\]\s*$"#,
-            #"^\d{2}:\d{2}:\d{2}\s*$"#
+            // Bare timestamp: HH:MM:SS
+            #"^\d{2}:\d{2}:\d{2}\s*$"#,
+            // Log4j style: HH:MM:SS.mmm
+            #"^\d{2}:\d{2}:\d{2}\.\d{3}\s*$"#,
+            // ISO style timestamps
+            #"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s*$"#,
+            // Log prefix with no message (flexible thread name)
+            #"^\[\d{2}:\d{2}:\d{2}[^\]]*\]\s*\[[^\]]+\]:?\s*$"#,
         ]
         for pattern in emptyLogPatterns {
             if stripped.range(of: pattern, options: .regularExpression) != nil {

@@ -28,7 +28,7 @@ struct ServerDetailView: View {
     @ViewBuilder
     private func tabContent(_ server: Server) -> some View {
         switch serverManager.selectedTab {
-        case .dashboard:
+        case .monitor:
             DashboardView(server: server)
                 .environmentObject(serverManager)
                 .padding(.top, 12)
