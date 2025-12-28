@@ -9,8 +9,55 @@
 </p>
 
 <p align="center">
-  <a href="#building">Build it yourself</a> · <a href="#features">Features</a>
+  <a href="#screenshots">Screenshots</a> · <a href="#features">Features</a> · <a href="#building">Build</a>
 </p>
+
+---
+
+## Screenshots
+
+<p align="center">
+  <img src="screenshots/monitor.webp" alt="Server Monitor" width="100%">
+</p>
+
+<p align="center">
+  <b>Monitor</b> — Real-time TPS, memory, storage, network stats, and performance timeline
+</p>
+
+<br>
+
+<p align="center">
+  <img src="screenshots/console.webp" alt="Live Console" width="100%">
+</p>
+
+<p align="center">
+  <b>Console</b> — Live console with full truecolor ANSI support and command autocomplete
+</p>
+
+<br>
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="screenshots/plugins.webp" alt="Plugin Manager" width="100%">
+      <p align="center"><b>Plugins</b> — One-click enable/disable</p>
+    </td>
+    <td width="50%">
+      <img src="screenshots/files.webp" alt="File Browser" width="100%">
+      <p align="center"><b>Files</b> — Native file browser</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <img src="screenshots/properties.webp" alt="Properties Editor" width="100%">
+      <p align="center"><b>Properties</b> — Visual config editor</p>
+    </td>
+    <td width="50%">
+      <img src="screenshots/settings.webp" alt="Server Settings" width="100%">
+      <p align="center"><b>Settings</b> — Connection configuration</p>
+    </td>
+  </tr>
+</table>
 
 ---
 
@@ -18,30 +65,25 @@
 
 MCPanel is a native macOS application for managing remote Minecraft servers. It provides a clean, minimal interface with a liquid glass aesthetic that feels right at home on macOS.
 
-This project is **fully open source**. You can clone it, build it, modify it, and use it however you like.
-
-- **SSH & RCON** support for remote server management
-- **Live console** with colored output and command history
-- **Plugin management** with enable/disable toggling
-- **File browser** for server files
-- **Server version management** via mcjarfiles.com API
+This project is **fully open source**. Clone it, build it, modify it, use it however you like.
 
 ## Features
 
 | Feature | Description |
 |---------|-------------|
 | **Multi-Server** | Manage multiple remote Minecraft servers |
-| **Live Console** | Real-time log streaming with ANSI color support |
-| **RCON Integration** | Send commands directly to the server |
-| **Plugin Manager** | Enable/disable plugins, view metadata |
-| **File Browser** | Native file explorer for server files |
-| **Version Manager** | Download and update server JARs |
+| **Live Console** | Real-time log streaming with 24-bit truecolor ANSI support |
+| **Server Monitor** | TPS, memory, CPU, storage, and network metrics at a glance |
+| **Plugin Manager** | Enable/disable plugins with a single click |
+| **File Browser** | Native macOS-style file explorer for server files |
+| **Properties Editor** | Visual editor for server.properties with categories |
+| **Version Manager** | Download and update server JARs via mcjarfiles.com |
 
 ## Requirements
 
 - macOS 14.0+ (Sonoma)
 - SSH access to your Minecraft server
-- RCON enabled on the server (optional but recommended)
+- Optional: [MCPanelBridge](https://github.com/Th0rgal/mcpanel-bridge) plugin for real-time metrics
 
 ## Building
 
@@ -58,41 +100,18 @@ This will:
 
 ### Clean Rebuild
 
-If you need to rebuild from scratch:
-
 ```bash
 swift package clean && rm -rf .build MCPanel.app && ./build-app.sh
 ```
 
 ## Configuration
 
-Create a `.secrets.json` file in the project root with your server credentials:
-
-```json
-{
-  "servers": {
-    "my_server": {
-      "name": "My Server",
-      "ssh": {
-        "host": "your.server.ip",
-        "port": 22,
-        "user": "root",
-        "identity_file": "~/.ssh/id_rsa"
-      },
-      "paths": {
-        "root_dir": "/path/to/minecraft",
-        "plugins_dir": "/path/to/minecraft/plugins",
-        "jar_path": "/path/to/minecraft/server.jar"
-      },
-      "rcon": {
-        "host": "127.0.0.1",
-        "port": 25575,
-        "password": "your_rcon_password"
-      }
-    }
-  }
-}
+Server configurations are stored in:
 ```
+~/Library/Application Support/MCPanel/
+```
+
+SSH credentials are stored securely in macOS Keychain.
 
 ## Keyboard Shortcuts
 
@@ -118,11 +137,8 @@ mcpanel/
 └── Package.swift         # Swift Package Manager config
 ```
 
-## Data Storage
+---
 
-Server configurations are stored in:
-```
-~/Library/Application Support/MCPanel/
-```
-
-SSH credentials are stored in macOS Keychain.
+<p align="center">
+  Made with SwiftUI for macOS
+</p>
