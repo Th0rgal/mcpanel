@@ -165,6 +165,9 @@ class MCPanelBridgeService: ObservableObject {
     /// Trailing partial OSC sequence carried across chunks
     private var pendingOSCFragment: String = ""
 
+    /// Last attempt to load commands.json (throttle reconnect bursts)
+    private var lastCommandTreeFetchAt: Date?
+
     // MARK: - Initialization
 
     init() {}
@@ -542,6 +545,17 @@ class MCPanelBridgeService: ObservableObject {
         }
     }
 
+    /// Ensure command tree is loaded at least once, with a simple throttle.
+    func fetchCommandTreeIfNeeded(minInterval: TimeInterval = 5) async {
+        if commandTree != nil { return }
+
+        if let last = lastCommandTreeFetchAt, Date().timeIntervalSince(last) < minInterval {
+            return
+        }
+        lastCommandTreeFetchAt = Date()
+        await fetchCommandTree()
+    }
+
     // MARK: - Bridge Detection
 
     /// Reset bridge state (e.g., on disconnect)
@@ -557,6 +571,7 @@ class MCPanelBridgeService: ObservableObject {
         performanceHistory.clear()
         dashboardActive = false
         pendingOSCFragment = ""
+        lastCommandTreeFetchAt = nil
     }
 
     /// Check if bridge supports a specific feature

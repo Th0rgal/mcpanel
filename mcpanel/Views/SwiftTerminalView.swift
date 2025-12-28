@@ -556,7 +556,28 @@ struct SelectableConsoleTextView: NSViewRepresentable {
                 with: "",
                 options: .regularExpression
             )
-            return !stripped.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let noMinecraft = stripped.replacingOccurrences(
+                of: "§.",
+                with: "",
+                options: .regularExpression
+            )
+            let trimmed = noMinecraft.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { return false }
+
+            // Hide timestamp-only lines (common after OSC stripping)
+            let timestampPatterns = [
+                #"^\[\d{2}:\d{2}:\d{2}\]\s*$"#,
+                #"^\d{2}:\d{2}:\d{2}\s*$"#,
+                #"^\[\d{2}:\d{2}:\d{2}\]\s*\[[^\]]+/(INFO|WARN|ERROR|DEBUG)\]:?\s*$"#,
+                #"^\d{2}:\d{2}:\d{2}\s+\[[^\]]+/(INFO|WARN|ERROR|DEBUG)\]:?\s*$"#
+            ]
+            for pattern in timestampPatterns {
+                if trimmed.range(of: pattern, options: .regularExpression) != nil {
+                    return false
+                }
+            }
+
+            return true
         }
 
         private func hasActiveSelection() -> Bool {
@@ -1030,6 +1051,10 @@ struct SwiftTermConsoleView: View {
                     serverManager.scrapeServerCommands(for: server)
                 }
             }
+
+            // Ensure commands.json is loaded even if bridge events were missed.
+            let bridge = serverManager.bridgeService(for: server)
+            await bridge.fetchCommandTreeIfNeeded()
         }
     }
 
