@@ -162,6 +162,9 @@ class MCPanelBridgeService: ObservableObject {
     /// SSH service for file operations
     private var sshService: SSHService?
 
+    /// Trailing partial OSC sequence carried across chunks
+    private var pendingOSCFragment: String = ""
+
     // MARK: - Initialization
 
     init() {}
@@ -177,12 +180,16 @@ class MCPanelBridgeService: ObservableObject {
     /// Process incoming PTY data to detect and handle bridge messages.
     /// Returns the filtered data with bridge messages removed.
     func processOutput(_ data: String) -> String {
-        guard MCPanelBridgeProtocol.containsMessage(data) else {
-            return data
+        let combined = pendingOSCFragment + data
+        let split = MCPanelBridgeProtocol.splitTrailingIncompleteOSC(combined)
+        pendingOSCFragment = split.remainder
+
+        guard MCPanelBridgeProtocol.containsMessage(split.complete) else {
+            return split.complete
         }
 
         // Extract messages
-        let messages = MCPanelBridgeProtocol.extractMessages(data)
+        let messages = MCPanelBridgeProtocol.extractMessages(split.complete)
 
         for message in messages {
             switch message {
@@ -194,7 +201,7 @@ class MCPanelBridgeService: ObservableObject {
         }
 
         // Return filtered output (without OSC messages)
-        return MCPanelBridgeProtocol.filterConsoleOutput(data)
+        return MCPanelBridgeProtocol.filterConsoleOutput(split.complete)
     }
 
     // MARK: - Event Handling
@@ -542,6 +549,7 @@ class MCPanelBridgeService: ObservableObject {
         registries = [:]
         performanceHistory.clear()
         dashboardActive = false
+        pendingOSCFragment = ""
     }
 
     /// Check if bridge supports a specific feature

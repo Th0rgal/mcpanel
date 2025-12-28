@@ -923,7 +923,11 @@ class ServerManager: ObservableObject {
         guard server.consoleMode == .ptyMcwrap else { return }
         guard let scrollback = await fetchScrollbackHistory(for: server) else { return }
 
-        let lines = scrollback.components(separatedBy: .newlines).filter { !$0.isEmpty }
+        let filteredScrollback = MCPanelBridgeProtocol.filterConsoleOutput(scrollback)
+        let lines = filteredScrollback
+            .components(separatedBy: .newlines)
+            .filter { !$0.isEmpty }
+            .filter { !shouldFilterLine($0) }
         guard !lines.isEmpty else { return }
 
         let serverId = server.id
@@ -1316,10 +1320,19 @@ class ServerManager: ObservableObject {
         }
 
         // Filter empty log lines (timestamp prefix with no content after OSC stripping)
-        // Matches patterns like "[HH:MM:SS INFO]:" or "[HH:MM:SS WARN]:" with nothing after
-        let emptyLogPattern = #"^\[\d{2}:\d{2}:\d{2}\s+(INFO|WARN|ERROR|DEBUG)\]:?\s*$"#
-        if stripped.range(of: emptyLogPattern, options: .regularExpression) != nil {
-            return true
+        // Covers common formats like:
+        // [HH:MM:SS INFO]:, [HH:MM:SS] [Server thread/INFO]:, or bare timestamps.
+        let emptyLogPatterns = [
+            #"^\[\d{2}:\d{2}:\d{2}\s+(INFO|WARN|ERROR|DEBUG)\]:?\s*$"#,
+            #"^\[\d{2}:\d{2}:\d{2}\]\s*\[[^\]]+/(INFO|WARN|ERROR|DEBUG)\]:?\s*$"#,
+            #"^\d{2}:\d{2}:\d{2}\s+\[[^\]]+/(INFO|WARN|ERROR|DEBUG)\]:?\s*$"#,
+            #"^\[\d{2}:\d{2}:\d{2}\]\s*$"#,
+            #"^\d{2}:\d{2}:\d{2}\s*$"#
+        ]
+        for pattern in emptyLogPatterns {
+            if stripped.range(of: pattern, options: .regularExpression) != nil {
+                return true
+            }
         }
 
         return false

@@ -6,6 +6,7 @@
 #   --release: optimized release build
 
 set -e
+set -o pipefail
 
 APP_NAME="MCPanel"
 APP_BUNDLE="$APP_NAME.app"

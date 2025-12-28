@@ -53,16 +53,54 @@ struct MCPanelBridgeProtocol {
         return messages
     }
 
+    /// Split data into complete OSC payloads and a trailing incomplete fragment (if any).
+    /// This prevents partial OSC sequences from leaking into console output across chunks.
+    static func splitTrailingIncompleteOSC(_ data: String) -> (complete: String, remainder: String) {
+        var searchStart = data.startIndex
+
+        while let prefixRange = data.range(of: oscPrefix, range: searchStart..<data.endIndex) {
+            let afterPrefix = data[prefixRange.upperBound...]
+            if let suffixRange = afterPrefix.range(of: oscSuffix) {
+                searchStart = suffixRange.upperBound
+            } else {
+                let complete = String(data[..<prefixRange.lowerBound])
+                let remainder = String(data[prefixRange.lowerBound...])
+                return (complete, remainder)
+            }
+        }
+
+        return (data, "")
+    }
+
     /// Filter out OSC messages from console output (so they don't display)
     static func filterConsoleOutput(_ data: String) -> String {
         var result = data
 
-        // Remove all OSC sequences
+        // Remove any full lines that contain OSC sequences (bridge messages are not real logs).
+        while let prefixRange = result.range(of: oscPrefix) {
+            let lineStart = result[..<prefixRange.lowerBound].lastIndex(where: { $0 == "\n" || $0 == "\r" })
+            let removeStart = lineStart.map { result.index(after: $0) } ?? result.startIndex
+
+            var lineEnd = result[prefixRange.upperBound...].firstIndex(where: { $0 == "\n" || $0 == "\r" }) ?? result.endIndex
+            if lineEnd < result.endIndex {
+                // If CRLF, consume both.
+                if result[lineEnd] == "\r" {
+                    let next = result.index(after: lineEnd)
+                    if next < result.endIndex && result[next] == "\n" {
+                        lineEnd = next
+                    }
+                }
+                lineEnd = result.index(after: lineEnd)
+            }
+
+            result.removeSubrange(removeStart..<lineEnd)
+        }
+
+        // Safety net: remove any remaining OSC sequences without dropping the line.
         while let prefixRange = result.range(of: oscPrefix) {
             let afterPrefix = result[prefixRange.upperBound...]
             if let suffixRange = afterPrefix.range(of: oscSuffix) {
-                // Remove the entire OSC sequence
-                result.removeSubrange(prefixRange.lowerBound...suffixRange.upperBound)
+                result.removeSubrange(prefixRange.lowerBound..<suffixRange.upperBound)
             } else {
                 break
             }
