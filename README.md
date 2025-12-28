@@ -83,7 +83,18 @@ This project is **fully open source**. Clone it, build it, modify it, use it how
 
 - macOS 14.0+ (Sonoma)
 - SSH access to your Minecraft server
-- Optional: [MCPanelBridge](https://github.com/Th0rgal/mcpanel-bridge) plugin for real-time metrics
+- Optional: MCPanelBridge plugin for real-time metrics
+
+## MCPanelBridge Plugin
+
+For enhanced server monitoring (TPS, memory, player events), install the companion plugin:
+
+| Platform | Download |
+|----------|----------|
+| **Bukkit/Paper** | [MCPanelBridge-Bukkit.jar](https://github.com/Th0rgal/mcpanel/releases/latest/download/MCPanelBridge-Bukkit.jar) |
+| **Velocity** | [MCPanelBridge-Velocity.jar](https://github.com/Th0rgal/mcpanel/releases/latest/download/MCPanelBridge-Velocity.jar) |
+
+Place the JAR in your server's `plugins/` folder and restart.
 
 ## Building
 
