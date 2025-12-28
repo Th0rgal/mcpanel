@@ -404,6 +404,7 @@ struct SelectableConsoleTextView: NSViewRepresentable {
         weak var textView: NSTextView?
         weak var scrollView: NSScrollView?
         private var renderedCount: Int = 0
+        private var lastRenderedId: UUID?
         private let baseFont: NSFont = NSFont(name: "Menlo", size: 12) ?? NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
 
         // Persistent ANSI parser to maintain color state across messages
@@ -411,47 +412,66 @@ struct SelectableConsoleTextView: NSViewRepresentable {
         private var ansiParser = ANSIParser()
 
         func update(messages: [ConsoleMessage]) {
+            if messages.isEmpty {
+                renderAll(messages: messages)
+                return
+            }
+
             // If list reset or shrunk, rerender fully.
             guard messages.count >= renderedCount else {
                 renderAll(messages: messages)
                 return
             }
             // If unchanged, do nothing.
-            guard messages.count != renderedCount else { return }
+            if messages.count == renderedCount {
+                // If the last message changed (e.g., full refresh with same count), rerender.
+                if messages.last?.id != lastRenderedId {
+                    renderAll(messages: messages)
+                }
+                return
+            }
 
             let newRange = renderedCount..<messages.count
             append(messages: Array(messages[newRange]))
             renderedCount = messages.count
+            lastRenderedId = messages.last?.id
         }
 
         func renderAll(messages: [ConsoleMessage]) {
             guard let textView else { return }
-            let atBottom = isNearBottom()
+            let shouldAutoScroll = shouldAutoScroll()
+            let preservedOffset = shouldAutoScroll ? nil : currentScrollOffset()
             textView.textStorage?.setAttributedString(NSAttributedString())
             renderedCount = 0
             // Reset parser state when re-rendering from scratch
             ansiParser = ANSIParser()
-            append(messages: messages)
+            append(messages: messages, autoScroll: false)
             renderedCount = messages.count
-            if atBottom {
+            lastRenderedId = messages.last?.id
+            if shouldAutoScroll {
                 scrollToBottom()
+            } else if let preservedOffset {
+                restoreScrollOffset(preservedOffset)
             }
         }
 
-        private func append(messages: [ConsoleMessage]) {
+        private func append(messages: [ConsoleMessage], autoScroll: Bool? = nil) {
             guard let textView else { return }
-            let atBottom = isNearBottom()
+            let shouldAutoScroll = autoScroll ?? shouldAutoScroll()
 
             let storage = textView.textStorage ?? NSTextStorage()
             for message in messages {
                 let line = render(message: message)
-                storage.append(line)
-                storage.append(NSAttributedString(string: "\n"))
+                let shouldDisplay = message.rawANSI ? hasVisibleContent(message.content) : true
+                if shouldDisplay {
+                    storage.append(line)
+                    storage.append(NSAttributedString(string: "\n"))
+                }
             }
             if textView.textStorage == nil {
                 textView.textStorage?.setAttributedString(storage)
             }
-            if atBottom {
+            if shouldAutoScroll {
                 scrollToBottom()
             }
         }
@@ -520,6 +540,44 @@ struct SelectableConsoleTextView: NSViewRepresentable {
             let visibleMaxY = contentView.documentVisibleRect.maxY
             let docHeight = documentView.bounds.height
             return (docHeight - visibleMaxY) <= threshold
+        }
+
+        private func shouldAutoScroll() -> Bool {
+            guard let textView else { return true }
+            if let responder = textView.window?.firstResponder, responder === textView {
+                return !hasActiveSelection() && isNearBottom()
+            }
+            return isNearBottom()
+        }
+
+        private func hasVisibleContent(_ text: String) -> Bool {
+            let stripped = text.replacingOccurrences(
+                of: "\u{1B}\\[[0-9;]*[A-Za-z]|\u{1B}\\][^\u{07}]*\u{07}|\u{1B}[^\\[\\]][A-Za-z]",
+                with: "",
+                options: .regularExpression
+            )
+            return !stripped.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+
+        private func hasActiveSelection() -> Bool {
+            guard let textView else { return false }
+            return textView.selectedRanges.contains { range in
+                guard let r = range as? NSRange else { return false }
+                return r.length > 0
+            }
+        }
+
+        private func currentScrollOffset() -> CGFloat? {
+            guard let scrollView else { return nil }
+            return scrollView.contentView.bounds.origin.y
+        }
+
+        private func restoreScrollOffset(_ offset: CGFloat) {
+            guard let scrollView, let documentView = scrollView.documentView else { return }
+            let maxOffset = max(0, documentView.bounds.height - scrollView.contentView.bounds.height)
+            let clamped = min(max(offset, 0), maxOffset)
+            scrollView.contentView.scroll(to: NSPoint(x: 0, y: clamped))
+            scrollView.reflectScrolledClipView(scrollView.contentView)
         }
 
         private func scrollToBottom() {
@@ -950,7 +1008,7 @@ struct SwiftTermConsoleView: View {
                     // Process scrollback through bridge service to detect any bridge messages
                     // This handles the case where bridge_ready event was sent before MCPanel connected
                     let bridge = serverManager.bridgeService(for: server)
-                    let filteredScrollback = bridge.processOutput(scrollback)
+                    let filteredScrollback = bridge.processOutput(scrollback, allowPartialBuffer: false)
 
                     // Store filtered scrollback to be fed when terminal is ready
                     // The timer will feed it once terminalController is available
@@ -965,9 +1023,10 @@ struct SwiftTermConsoleView: View {
                 }
             }
 
-            // Start dynamic command discovery in background (even if bridge not detected)
+            // Start dynamic command discovery in background if we don't have a command tree yet.
             await MainActor.run {
-                if !serverManager.isBridgeDetected(for: server) {
+                let bridge = serverManager.bridgeService(for: server)
+                if bridge.commandTree == nil {
                     serverManager.scrapeServerCommands(for: server)
                 }
             }

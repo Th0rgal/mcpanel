@@ -76,27 +76,7 @@ struct MCPanelBridgeProtocol {
     static func filterConsoleOutput(_ data: String) -> String {
         var result = data
 
-        // Remove any full lines that contain OSC sequences (bridge messages are not real logs).
-        while let prefixRange = result.range(of: oscPrefix) {
-            let lineStart = result[..<prefixRange.lowerBound].lastIndex(where: { $0 == "\n" || $0 == "\r" })
-            let removeStart = lineStart.map { result.index(after: $0) } ?? result.startIndex
-
-            var lineEnd = result[prefixRange.upperBound...].firstIndex(where: { $0 == "\n" || $0 == "\r" }) ?? result.endIndex
-            if lineEnd < result.endIndex {
-                // If CRLF, consume both.
-                if result[lineEnd] == "\r" {
-                    let next = result.index(after: lineEnd)
-                    if next < result.endIndex && result[next] == "\n" {
-                        lineEnd = next
-                    }
-                }
-                lineEnd = result.index(after: lineEnd)
-            }
-
-            result.removeSubrange(removeStart..<lineEnd)
-        }
-
-        // Safety net: remove any remaining OSC sequences without dropping the line.
+        // Remove OSC sequences without dropping surrounding line content.
         while let prefixRange = result.range(of: oscPrefix) {
             let afterPrefix = result[prefixRange.upperBound...]
             if let suffixRange = afterPrefix.range(of: oscSuffix) {

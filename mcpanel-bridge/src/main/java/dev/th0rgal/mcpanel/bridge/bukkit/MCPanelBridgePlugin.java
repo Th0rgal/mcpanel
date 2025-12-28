@@ -55,9 +55,12 @@ public class MCPanelBridgePlugin extends JavaPlugin implements Listener {
     private BrigadierExporter brigadierExporter;
 
     // Cached command tree (rebuilt on plugin reload)
-    private CommandTreePayload cachedCommandTree;
-    private long commandTreeCacheTime = 0;
+    // These fields are accessed from multiple threads (main thread, RCON thread, ForkJoinPool)
+    // volatile ensures visibility across threads
+    private volatile CommandTreePayload cachedCommandTree;
+    private volatile long commandTreeCacheTime = 0;
     private static final long CACHE_TTL = 60_000; // 1 minute
+    private final Object cacheLock = new Object();
 
     // Command dump file location
     private File commandsFile;
@@ -197,8 +200,10 @@ public class MCPanelBridgePlugin extends JavaPlugin implements Listener {
         try {
             // Export Brigadier command tree
             CommandTreePayload commandTree = brigadierExporter.export();
-            cachedCommandTree = commandTree;
-            commandTreeCacheTime = System.currentTimeMillis();
+            synchronized (cacheLock) {
+                cachedCommandTree = commandTree;
+                commandTreeCacheTime = System.currentTimeMillis();
+            }
 
             // Convert to JSON using Gson
             com.google.gson.Gson gson = new com.google.gson.GsonBuilder()
@@ -478,19 +483,29 @@ public class MCPanelBridgePlugin extends JavaPlugin implements Listener {
      * Handle command tree request.
      */
     private CompletableFuture<MCPanelResponse> handleCommands(@NotNull MCPanelRequest request) {
-        // Use cached tree if fresh
+        // Use cached tree if fresh (volatile reads ensure visibility)
         long now = System.currentTimeMillis();
-        if (cachedCommandTree != null && (now - commandTreeCacheTime) < CACHE_TTL) {
+        CommandTreePayload cached = cachedCommandTree;
+        long cacheTime = commandTreeCacheTime;
+
+        if (cached != null && (now - cacheTime) < CACHE_TTL) {
             return CompletableFuture.completedFuture(
-                    MCPanelResponse.create(request.getId(), "command_tree", cachedCommandTree)
+                    MCPanelResponse.create(request.getId(), "command_tree", cached)
             );
         }
 
-        // Rebuild cache
+        // Rebuild cache (synchronized to prevent concurrent rebuilds)
         return CompletableFuture.supplyAsync(() -> {
-            cachedCommandTree = brigadierExporter.export();
-            commandTreeCacheTime = System.currentTimeMillis();
-            return MCPanelResponse.create(request.getId(), "command_tree", cachedCommandTree);
+            synchronized (cacheLock) {
+                // Double-check: another thread may have rebuilt while we waited
+                if (cachedCommandTree != null && (System.currentTimeMillis() - commandTreeCacheTime) < CACHE_TTL) {
+                    return MCPanelResponse.create(request.getId(), "command_tree", cachedCommandTree);
+                }
+                CommandTreePayload newTree = brigadierExporter.export();
+                cachedCommandTree = newTree;
+                commandTreeCacheTime = System.currentTimeMillis();
+                return MCPanelResponse.create(request.getId(), "command_tree", newTree);
+            }
         });
     }
 

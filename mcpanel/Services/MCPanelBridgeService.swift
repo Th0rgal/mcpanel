@@ -179,17 +179,24 @@ class MCPanelBridgeService: ObservableObject {
 
     /// Process incoming PTY data to detect and handle bridge messages.
     /// Returns the filtered data with bridge messages removed.
-    func processOutput(_ data: String) -> String {
-        let combined = pendingOSCFragment + data
-        let split = MCPanelBridgeProtocol.splitTrailingIncompleteOSC(combined)
-        pendingOSCFragment = split.remainder
+    func processOutput(_ data: String, allowPartialBuffer: Bool = true) -> String {
+        let complete: String
+        if allowPartialBuffer {
+            let combined = pendingOSCFragment + data
+            let split = MCPanelBridgeProtocol.splitTrailingIncompleteOSC(combined)
+            pendingOSCFragment = split.remainder
+            complete = split.complete
+        } else {
+            let split = MCPanelBridgeProtocol.splitTrailingIncompleteOSC(data)
+            complete = split.complete
+        }
 
-        guard MCPanelBridgeProtocol.containsMessage(split.complete) else {
-            return split.complete
+        guard MCPanelBridgeProtocol.containsMessage(complete) else {
+            return complete
         }
 
         // Extract messages
-        let messages = MCPanelBridgeProtocol.extractMessages(split.complete)
+        let messages = MCPanelBridgeProtocol.extractMessages(complete)
 
         for message in messages {
             switch message {
@@ -201,7 +208,7 @@ class MCPanelBridgeService: ObservableObject {
         }
 
         // Return filtered output (without OSC messages)
-        return MCPanelBridgeProtocol.filterConsoleOutput(split.complete)
+        return MCPanelBridgeProtocol.filterConsoleOutput(complete)
     }
 
     // MARK: - Event Handling

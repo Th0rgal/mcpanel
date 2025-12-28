@@ -98,6 +98,10 @@ class PerformanceAlertService: ObservableObject {
     /// Track when we last sent an alert for each threshold (per server)
     private var lastAlertTimes: [UUID: [String: Date]] = [:]
 
+    /// Track active critical alerts per metric (per server) to suppress redundant warnings
+    /// Key format: "metric" (e.g., "tps", "mspt", "memory")
+    private var activeCriticalAlerts: [UUID: Set<String>] = [:]
+
     /// Notification center for authorization
     private let notificationCenter = UNUserNotificationCenter.current()
 
@@ -131,6 +135,30 @@ class PerformanceAlertService: ObservableObject {
         let now = Date()
         let memoryPercent = Double(status.usedMemoryMB) / Double(max(status.maxMemoryMB, 1)) * 100
 
+        // Track which metrics have active critical violations this cycle
+        var currentCriticalMetrics: Set<String> = []
+
+        // First pass: identify active critical violations
+        for threshold in thresholds where threshold.severity == .critical {
+            let value: Double
+            switch threshold.metric {
+            case .tps: value = status.tps
+            case .mspt: value = status.mspt ?? 0
+            case .memory: value = memoryPercent
+            }
+
+            let metricKey = "\(threshold.metric)"
+
+            if threshold.isTriggered(by: value) {
+                currentCriticalMetrics.insert(metricKey)
+            }
+        }
+
+        // Update active critical alerts tracking
+        if activeCriticalAlerts[serverId] == nil {
+            activeCriticalAlerts[serverId] = []
+        }
+
         for threshold in thresholds {
             let value: Double
             switch threshold.metric {
@@ -140,6 +168,7 @@ class PerformanceAlertService: ObservableObject {
             }
 
             let key = "\(threshold.metric)-\(threshold.severity)"
+            let metricKey = "\(threshold.metric)"
 
             if threshold.isTriggered(by: value) {
                 // Violation detected
@@ -156,6 +185,16 @@ class PerformanceAlertService: ObservableObject {
                     let duration = now.timeIntervalSince(startTime)
 
                     if duration >= Double(threshold.sustainedSeconds) {
+                        // Skip warning alerts if a critical alert is active for the same metric
+                        // This prevents confusing "warning after critical" notifications
+                        if threshold.severity == .warning {
+                            let hasCriticalForMetric = activeCriticalAlerts[serverId]?.contains(metricKey) ?? false
+                            if hasCriticalForMetric {
+                                // Critical is already active, skip this warning
+                                continue
+                            }
+                        }
+
                         // Check cooldown
                         let lastAlert = lastAlertTimes[serverId]?[key]
                         let shouldAlert = lastAlert == nil || now.timeIntervalSince(lastAlert!) >= alertCooldown
@@ -172,12 +211,22 @@ class PerformanceAlertService: ObservableObject {
                                 lastAlertTimes[serverId] = [:]
                             }
                             lastAlertTimes[serverId]?[key] = now
+
+                            // Track critical alerts to suppress subsequent warnings
+                            if threshold.severity == .critical {
+                                activeCriticalAlerts[serverId]?.insert(metricKey)
+                            }
                         }
                     }
                 }
             } else {
                 // No violation - reset tracking
                 violationStartTimes[serverId]?[key] = nil
+
+                // Clear critical alert tracking when metric recovers
+                if threshold.severity == .critical {
+                    activeCriticalAlerts[serverId]?.remove(metricKey)
+                }
             }
         }
     }
@@ -229,5 +278,6 @@ class PerformanceAlertService: ObservableObject {
     func clearState(for serverId: UUID) {
         violationStartTimes[serverId] = nil
         lastAlertTimes[serverId] = nil
+        activeCriticalAlerts[serverId] = nil
     }
 }

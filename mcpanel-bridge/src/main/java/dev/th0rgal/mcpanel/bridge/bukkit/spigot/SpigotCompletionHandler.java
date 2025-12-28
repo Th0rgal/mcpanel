@@ -25,9 +25,25 @@ public class SpigotCompletionHandler implements CompletionHandler {
 
     @Override
     public @NotNull CompletableFuture<CompletionPayload> complete(@NotNull String buffer) {
-        CompletableFuture<CompletionPayload> future = new CompletableFuture<>();
+        // If already on main thread (e.g., console command), execute directly to avoid deadlock.
+        // Scheduling to main thread while blocking on main thread causes deadlock:
+        // main thread waits for future -> future waits for scheduled task -> task waits for main thread
+        if (Bukkit.isPrimaryThread()) {
+            try {
+                List<String> completions = getCompletions(buffer);
+                List<CompletionPayload.Completion> result = completions.stream()
+                        .map(CompletionPayload.Completion::new)
+                        .collect(Collectors.toList());
+                return CompletableFuture.completedFuture(new CompletionPayload(result, false));
+            } catch (Exception e) {
+                CompletableFuture<CompletionPayload> failed = new CompletableFuture<>();
+                failed.completeExceptionally(e);
+                return failed;
+            }
+        }
 
-        // Must run on main thread for Spigot
+        // Called from another thread (e.g., RCON) - schedule to main thread
+        CompletableFuture<CompletionPayload> future = new CompletableFuture<>();
         Bukkit.getScheduler().runTask(plugin, () -> {
             try {
                 List<String> completions = getCompletions(buffer);
