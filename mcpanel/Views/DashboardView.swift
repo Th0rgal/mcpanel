@@ -856,6 +856,15 @@ struct PerformanceChartView: View {
             case .thirtyMinutes: return 3600
             }
         }
+
+        var duration: TimeInterval {
+            switch self {
+            case .oneMinute: return 60
+            case .fiveMinutes: return 300
+            case .fifteenMinutes: return 900
+            case .thirtyMinutes: return 1800
+            }
+        }
     }
 
     private struct TimelineSeriesPoint: Identifiable {
@@ -889,6 +898,18 @@ struct PerformanceChartView: View {
 
     private func normalizedTps(_ value: Double) -> Double {
         min(max((value / 20.0) * 100.0, 0), 100)
+    }
+
+    private func trimRange(
+        _ data: [PerformanceHistory.DataPoint],
+        start: Date,
+        maxSamples: Int
+    ) -> [PerformanceHistory.DataPoint] {
+        let filtered = data.filter { $0.timestamp >= start }
+        if filtered.count > maxSamples {
+            return Array(filtered.suffix(maxSamples))
+        }
+        return filtered
     }
 
     private func baseTimeline(_ fallback: [PerformanceHistory.DataPoint]...) -> [Date] {
@@ -1136,13 +1157,15 @@ struct PerformanceChartView: View {
 
             // Chart
             let sampleCount = selectedTimeRange.sampleCount
-            let tpsData = Array(history.tpsHistory.suffix(sampleCount))
-            let memoryData = Array(history.memoryHistory.suffix(sampleCount))
-            let cpuData = Array(history.cpuHistory.suffix(sampleCount))
-            let systemCpuData = Array(history.systemCpuHistory.suffix(sampleCount))
-            let perCoreData = history.perCoreCpuHistory.map { Array($0.suffix(sampleCount)) }
-            let rxData = Array(history.networkRxHistory.suffix(sampleCount))
-            let txData = Array(history.networkTxHistory.suffix(sampleCount))
+            let rangeEnd = Date()
+            let rangeStart = rangeEnd.addingTimeInterval(-selectedTimeRange.duration)
+            let tpsData = trimRange(history.tpsHistory, start: rangeStart, maxSamples: sampleCount)
+            let memoryData = trimRange(history.memoryHistory, start: rangeStart, maxSamples: sampleCount)
+            let cpuData = trimRange(history.cpuHistory, start: rangeStart, maxSamples: sampleCount)
+            let systemCpuData = trimRange(history.systemCpuHistory, start: rangeStart, maxSamples: sampleCount)
+            let perCoreData = history.perCoreCpuHistory.map { trimRange($0, start: rangeStart, maxSamples: sampleCount) }
+            let rxData = trimRange(history.networkRxHistory, start: rangeStart, maxSamples: sampleCount)
+            let txData = trimRange(history.networkTxHistory, start: rangeStart, maxSamples: sampleCount)
 
             let baseTimeline = baseTimeline(tpsData, memoryData, cpuData, systemCpuData, rxData, txData)
             let seriesPoints = buildSeriesPoints(
@@ -1179,6 +1202,7 @@ struct PerformanceChartView: View {
                             .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
                     }
                 }
+                .chartXScale(domain: rangeStart...rangeEnd)
                 .chartYScale(domain: 0...100)
                 .chartXAxis(.hidden)
                 .chartYAxis {
