@@ -876,6 +876,105 @@ struct PerformanceChartView: View {
         min(max((value / 20.0) * 100.0, 0), 100)
     }
 
+    private func buildSeriesPoints(
+        tpsData: [PerformanceHistory.DataPoint],
+        memoryData: [PerformanceHistory.DataPoint],
+        cpuData: [PerformanceHistory.DataPoint],
+        systemCpuData: [PerformanceHistory.DataPoint],
+        perCoreData: [[PerformanceHistory.DataPoint]],
+        rxData: [PerformanceHistory.DataPoint],
+        txData: [PerformanceHistory.DataPoint]
+    ) -> [TimelineSeriesPoint] {
+        var seriesPoints: [TimelineSeriesPoint] = []
+
+        let maxBandwidth = max(rxData.map { $0.value }.max() ?? 0, txData.map { $0.value }.max() ?? 0)
+        let normalizeBandwidth: (Double) -> Double = { value in
+            guard maxBandwidth > 0 else { return 0 }
+            return min(max(value / maxBandwidth * 100.0, 0), 100)
+        }
+
+        // TPS (scaled to 0-100)
+        for point in tpsData {
+            seriesPoints.append(TimelineSeriesPoint(
+                time: point.timestamp,
+                value: normalizedTps(point.value),
+                series: "TPS",
+                color: Color(hex: "22C55E"),
+                lineWidth: 2
+            ))
+        }
+
+        // RAM usage (already %)
+        for point in memoryData {
+            seriesPoints.append(TimelineSeriesPoint(
+                time: point.timestamp,
+                value: min(max(point.value, 0), 100),
+                series: "RAM",
+                color: Color(hex: "A855F7"),
+                lineWidth: 2
+            ))
+        }
+
+        // CPU per core if available, otherwise aggregate CPU
+        if !perCoreData.isEmpty {
+            for (index, coreSeries) in perCoreData.enumerated() {
+                let color = coreColor(index, total: perCoreData.count)
+                for point in coreSeries {
+                    seriesPoints.append(TimelineSeriesPoint(
+                        time: point.timestamp,
+                        value: min(max(point.value, 0), 100),
+                        series: "CPU \(index + 1)",
+                        color: color.opacity(0.8),
+                        lineWidth: 1.2
+                    ))
+                }
+            }
+        } else if !cpuData.isEmpty {
+            for point in cpuData {
+                seriesPoints.append(TimelineSeriesPoint(
+                    time: point.timestamp,
+                    value: min(max(point.value, 0), 100),
+                    series: "CPU",
+                    color: Color(hex: "3B82F6"),
+                    lineWidth: 1.6
+                ))
+            }
+        } else if !systemCpuData.isEmpty {
+            for point in systemCpuData {
+                seriesPoints.append(TimelineSeriesPoint(
+                    time: point.timestamp,
+                    value: min(max(point.value, 0), 100),
+                    series: "CPU (SYS)",
+                    color: Color(hex: "3B82F6").opacity(0.9),
+                    lineWidth: 1.6
+                ))
+            }
+        }
+
+        // Bandwidth (normalized to peak in range)
+        for point in rxData {
+            seriesPoints.append(TimelineSeriesPoint(
+                time: point.timestamp,
+                value: normalizeBandwidth(point.value),
+                series: "Net RX",
+                color: Color(hex: "22D3EE"),
+                lineWidth: 1.4
+            ))
+        }
+
+        for point in txData {
+            seriesPoints.append(TimelineSeriesPoint(
+                time: point.timestamp,
+                value: normalizeBandwidth(point.value),
+                series: "Net TX",
+                color: Color(hex: "0EA5E9"),
+                lineWidth: 1.4
+            ))
+        }
+
+        return seriesPoints
+    }
+
     var body: some View {
         VStack(spacing: 12) {
             // Time range selector
@@ -910,92 +1009,15 @@ struct PerformanceChartView: View {
             let rxData = Array(history.networkRxHistory.suffix(sampleCount))
             let txData = Array(history.networkTxHistory.suffix(sampleCount))
 
-            let maxBandwidth = max(rxData.map { $0.value }.max() ?? 0, txData.map { $0.value }.max() ?? 0)
-            let normalizeBandwidth: (Double) -> Double = { value in
-                guard maxBandwidth > 0 else { return 0 }
-                return min(max(value / maxBandwidth * 100.0, 0), 100)
-            }
-
-            var seriesPoints: [TimelineSeriesPoint] = []
-
-            // TPS (scaled to 0-100)
-            for point in tpsData {
-                seriesPoints.append(TimelineSeriesPoint(
-                    time: point.timestamp,
-                    value: normalizedTps(point.value),
-                    series: "TPS",
-                    color: Color(hex: "22C55E"),
-                    lineWidth: 2
-                ))
-            }
-
-            // RAM usage (already %)
-            for point in memoryData {
-                seriesPoints.append(TimelineSeriesPoint(
-                    time: point.timestamp,
-                    value: min(max(point.value, 0), 100),
-                    series: "RAM",
-                    color: Color(hex: "A855F7"),
-                    lineWidth: 2
-                ))
-            }
-
-            // CPU per core if available, otherwise aggregate CPU
-            if !perCoreData.isEmpty {
-                for (index, coreSeries) in perCoreData.enumerated() {
-                    let color = coreColor(index, total: perCoreData.count)
-                    for point in coreSeries {
-                        seriesPoints.append(TimelineSeriesPoint(
-                            time: point.timestamp,
-                            value: min(max(point.value, 0), 100),
-                            series: "CPU \(index + 1)",
-                            color: color.opacity(0.8),
-                            lineWidth: 1.2
-                        ))
-                    }
-                }
-            } else if !cpuData.isEmpty {
-                for point in cpuData {
-                    seriesPoints.append(TimelineSeriesPoint(
-                        time: point.timestamp,
-                        value: min(max(point.value, 0), 100),
-                        series: "CPU",
-                        color: Color(hex: "3B82F6"),
-                        lineWidth: 1.6
-                    ))
-                }
-            } else if !systemCpuData.isEmpty {
-                for point in systemCpuData {
-                    seriesPoints.append(TimelineSeriesPoint(
-                        time: point.timestamp,
-                        value: min(max(point.value, 0), 100),
-                        series: "CPU (SYS)",
-                        color: Color(hex: "3B82F6").opacity(0.9),
-                        lineWidth: 1.6
-                    ))
-                }
-            }
-
-            // Bandwidth (normalized to peak in range)
-            for point in rxData {
-                seriesPoints.append(TimelineSeriesPoint(
-                    time: point.timestamp,
-                    value: normalizeBandwidth(point.value),
-                    series: "Net RX",
-                    color: Color(hex: "22D3EE"),
-                    lineWidth: 1.4
-                ))
-            }
-
-            for point in txData {
-                seriesPoints.append(TimelineSeriesPoint(
-                    time: point.timestamp,
-                    value: normalizeBandwidth(point.value),
-                    series: "Net TX",
-                    color: Color(hex: "0EA5E9"),
-                    lineWidth: 1.4
-                ))
-            }
+            let seriesPoints = buildSeriesPoints(
+                tpsData: tpsData,
+                memoryData: memoryData,
+                cpuData: cpuData,
+                systemCpuData: systemCpuData,
+                perCoreData: perCoreData,
+                rxData: rxData,
+                txData: txData
+            )
 
             if !seriesPoints.isEmpty {
                 Chart {
