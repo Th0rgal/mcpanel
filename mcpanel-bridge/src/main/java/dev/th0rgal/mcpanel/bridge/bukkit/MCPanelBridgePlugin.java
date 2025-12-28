@@ -87,6 +87,26 @@ public class MCPanelBridgePlugin extends JavaPlugin implements Listener {
     // Debug logging toggle (config.yml)
     private boolean debugLogging = false;
 
+    private void sendPlayersUpdateEvent() {
+        List<MCPanelEvent.PlayersUpdatePayload.PlayerInfo> players = new ArrayList<>();
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            players.add(new MCPanelEvent.PlayersUpdatePayload.PlayerInfo(
+                    player.getName(),
+                    player.getUniqueId().toString(),
+                    player.getWorld().getName(),
+                    player.getPing()
+            ));
+        }
+
+        MCPanelEvent.PlayersUpdatePayload payload = new MCPanelEvent.PlayersUpdatePayload(
+                players.size(),
+                Bukkit.getMaxPlayers(),
+                players
+        );
+
+        sendEvent(MCPanelEvent.playersUpdate(payload));
+    }
+
     @Override
     public void onEnable() {
         // Detect platform
@@ -134,6 +154,7 @@ public class MCPanelBridgePlugin extends JavaPlugin implements Listener {
             sendSystemInfoEvent();
             generateCommandDump();
             exportPluginRegistries();
+            sendPlayersUpdateEvent();
             startStatusBroadcaster();
         }, 40L); // 2 second delay to ensure all plugins are loaded
     }
@@ -243,6 +264,7 @@ public class MCPanelBridgePlugin extends JavaPlugin implements Listener {
         scheduleRepeatingTask(() -> {
             MCPanelEvent.StatusPayload status = buildStatusPayload();
             sendEvent(MCPanelEvent.statusUpdate(status));
+            sendPlayersUpdateEvent();
         }, STATUS_BROADCAST_INTERVAL, STATUS_BROADCAST_INTERVAL);
 
         logDebug("Started status broadcaster (interval: " + (STATUS_BROADCAST_INTERVAL / 20) + "s)");
@@ -1087,12 +1109,14 @@ public class MCPanelBridgePlugin extends JavaPlugin implements Listener {
     public void onPlayerJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
         sendEvent(MCPanelEvent.playerJoin(player.getName(), player.getUniqueId().toString()));
+        sendPlayersUpdateEvent();
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerQuit(PlayerQuitEvent event) {
         Player player = event.getPlayer();
         sendEvent(MCPanelEvent.playerLeave(player.getName(), player.getUniqueId().toString()));
+        sendPlayersUpdateEvent();
     }
 
     @EventHandler(priority = EventPriority.MONITOR)

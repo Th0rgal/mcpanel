@@ -1998,6 +1998,9 @@ struct ClickablePlayerIndicator: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            let hasPlayers = !players.isEmpty
+            let isWaitingForPlayers = playerCount > 0 && !hasPlayers
+
             // Clickable header
             Button(action: { withAnimation(.spring()) { isExpanded.toggle() } }) {
                 HStack(spacing: 16) {
@@ -2049,14 +2052,31 @@ struct ClickablePlayerIndicator: View {
             .buttonStyle(.plain)
 
             // Expandable player grid
-            if isExpanded && !players.isEmpty {
+            if isExpanded && hasPlayers {
                 Divider()
                     .background(Color.white.opacity(0.1))
 
                 PlayerGridView(players: players)
                     .padding(16)
                     .transition(.opacity.combined(with: .move(edge: .top)))
-            } else if isExpanded && players.isEmpty {
+            } else if isExpanded && isWaitingForPlayers {
+                Divider()
+                    .background(Color.white.opacity(0.1))
+
+                HStack {
+                    Spacer()
+                    VStack(spacing: 8) {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .blue))
+                        Text("Loading player list…")
+                            .font(.system(size: 12))
+                            .foregroundColor(.white.opacity(0.4))
+                    }
+                    .padding(.vertical, 20)
+                    Spacer()
+                }
+                .transition(.opacity)
+            } else if isExpanded && !hasPlayers {
                 Divider()
                     .background(Color.white.opacity(0.1))
 
