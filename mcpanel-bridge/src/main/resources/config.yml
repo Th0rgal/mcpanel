@@ -1,0 +1,3 @@
+# MCPanel Bridge configuration
+# Set to true to enable verbose MCPanel Bridge logs.
+debug: false

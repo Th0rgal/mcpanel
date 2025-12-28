@@ -11,59 +11,10 @@ import Foundation
 
 /// Utility for encoding/decoding MCPanel Bridge protocol messages.
 /// Messages use iTerm2 OSC sequence format: \x1B]1337;MCPanel:<base64>\x07 (for events)
-/// RCON responses use simple format: MCPANEL:<base64-json>
 struct MCPanelBridgeProtocol {
 
     private static let oscPrefix = "\u{1B}]1337;MCPanel:"
     private static let oscSuffix = "\u{07}"
-
-    /// RCON response prefix (simpler format for RCON transmission)
-    private static let rconPrefix = "MCPANEL:"
-
-    /// Command prefix for sending requests via console command.
-    /// This is sent as a registered Bukkit command to be handled by the plugin.
-    private static let commandName = "mcpanel"
-
-    /// Encode a request as a console command.
-    /// Format: mcpanel <base64-json>
-    /// The MCPanelBridge plugin handles this as a registered command.
-    static func encodeRequest(_ request: MCPanelRequest) -> String {
-        guard let jsonData = try? JSONEncoder().encode(request),
-              let json = String(data: jsonData, encoding: .utf8) else {
-            return ""
-        }
-        let base64 = Data(json.utf8).base64EncodedString()
-        return "\(commandName) \(base64)"
-    }
-
-    // MARK: - RCON Response Parsing
-
-    /// Check if the RCON output contains an MCPanel response
-    static func containsRCONResponse(_ data: String) -> Bool {
-        return data.contains(rconPrefix)
-    }
-
-    /// Parse an MCPanel response from RCON output.
-    /// Format: MCPANEL:<base64-json>
-    static func parseRCONResponse(_ data: String) -> MCPanelResponse? {
-        // Find the MCPANEL: prefix
-        guard let prefixRange = data.range(of: rconPrefix) else {
-            return nil
-        }
-
-        // Extract base64 content (everything after MCPANEL: until newline or end)
-        let afterPrefix = data[prefixRange.upperBound...]
-        let base64End = afterPrefix.firstIndex(of: "\n") ?? afterPrefix.endIndex
-        let base64 = String(afterPrefix[..<base64End]).trimmingCharacters(in: .whitespaces)
-
-        // Decode base64 to JSON
-        guard let jsonData = Data(base64Encoded: base64) else {
-            return nil
-        }
-
-        // Parse as MCPanelResponse
-        return try? JSONDecoder().decode(MCPanelResponse.self, from: jsonData)
-    }
 
     /// Check if data contains an OSC-encoded MCPanel message
     static func containsMessage(_ data: String) -> Bool {
@@ -128,49 +79,11 @@ enum MCPanelMessageWrapper {
     case event(MCPanelEvent)
 }
 
-// MARK: - Request Types
+// MARK: - Request Types (unused - kept for potential future use)
 
-struct MCPanelRequest: Codable {
-    let id: String
-    let type: RequestType
-    var payload: [String: String]?
-
-    enum RequestType: String, Codable {
-        case complete = "COMPLETE"
-        case commands = "COMMANDS"
-        case players = "PLAYERS"
-        case status = "STATUS"
-        case plugins = "PLUGINS"
-        case worlds = "WORLDS"
-        case ping = "PING"
-    }
-
-    init(type: RequestType, payload: [String: String]? = nil) {
-        self.id = UUID().uuidString.prefix(8).lowercased()
-        self.type = type
-        self.payload = payload
-    }
-
-    static func complete(buffer: String) -> MCPanelRequest {
-        MCPanelRequest(type: .complete, payload: ["buffer": buffer])
-    }
-
-    static func commands() -> MCPanelRequest {
-        MCPanelRequest(type: .commands)
-    }
-
-    static func players() -> MCPanelRequest {
-        MCPanelRequest(type: .players)
-    }
-
-    static func status() -> MCPanelRequest {
-        MCPanelRequest(type: .status)
-    }
-
-    static func plugins() -> MCPanelRequest {
-        MCPanelRequest(type: .plugins)
-    }
-}
+// Note: RCON-based requests have been removed. The bridge now operates via:
+// - Events sent via OSC sequences in PTY output (detected passively)
+// - Command tree fetched via SSH file read (plugins/MCPanelBridge/commands.json)
 
 // MARK: - Response Types
 
@@ -200,6 +113,15 @@ struct CompletionPayload: Codable {
     struct Completion: Codable {
         let text: String
         let tooltip: String?
+        var hasChildren: Bool = false  // Whether this completion has subcommands/arguments
+        var isTypeHint: Bool = false   // If true, this is just a type hint (e.g., <itemid>), not a literal value to insert
+
+        init(text: String, tooltip: String? = nil, hasChildren: Bool = false, isTypeHint: Bool = false) {
+            self.text = text
+            self.tooltip = tooltip
+            self.hasChildren = hasChildren
+            self.isTypeHint = isTypeHint
+        }
     }
 }
 
@@ -223,7 +145,21 @@ struct CommandTreePayload: Codable {
     }
 }
 
-struct PlayerListPayload: Codable {
+// MARK: - Status Update Payload (periodic broadcast from bridge)
+
+struct StatusUpdatePayload: Codable {
+    let tps: Double
+    let mspt: Double?
+    let playerCount: Int
+    let maxPlayers: Int
+    let usedMemoryMB: Int64
+    let maxMemoryMB: Int64
+    let uptimeSeconds: Int64
+}
+
+// MARK: - Players Update Payload (periodic player list broadcast)
+
+struct PlayersUpdatePayload: Codable {
     let count: Int
     let max: Int
     let players: [PlayerInfo]
@@ -231,56 +167,24 @@ struct PlayerListPayload: Codable {
     struct PlayerInfo: Codable {
         let name: String
         let uuid: String
-        let world: String?
-        let displayName: String?
-        let health: Double
-        let foodLevel: Int
+        let world: String
         let ping: Int
-        let op: Bool
-        let gameMode: String?
     }
 }
 
-struct ServerStatusPayload: Codable {
-    let version: String
-    let software: String
-    let softwareVersion: String?
-    let onlinePlayers: Int
-    let maxPlayers: Int
-    let tps: [Double]?
-    let mspt: Double?
-    let memory: MemoryInfo
-    let worlds: [WorldInfo]?
+// MARK: - Registry Update Payload (static data from plugins)
 
-    struct MemoryInfo: Codable {
-        let used: Int
-        let max: Int
-        let free: Int
-    }
-
-    struct WorldInfo: Codable {
-        let name: String
-        let players: Int
-        let entities: Int
-        let loadedChunks: Int
-        let environment: String?
-    }
+struct RegistryUpdatePayload: Codable {
+    let plugin: String
+    let type: String
+    let values: [String]
 }
 
-struct PluginListPayload: Codable {
-    let plugins: [PluginInfo]
+// MARK: - Commands Updated Payload (notifies when command tree changed)
 
-    struct PluginInfo: Codable {
-        let name: String
-        let version: String
-        let enabled: Bool
-        let description: String?
-        let authors: [String]?
-        let website: String?
-        let commands: [String]?
-        let dependencies: [String]?
-        let softDependencies: [String]?
-    }
+struct CommandsUpdatedPayload: Codable {
+    let reason: String      // e.g., "plugin_enabled:EssentialsX" or "plugin_disabled:MyPlugin"
+    let timestamp: Int64
 }
 
 // MARK: - AnyCodable Helper

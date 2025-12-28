@@ -453,7 +453,7 @@ struct MinecraftFormattedText: View {
         var isItalic = false
         var isUnderline = false
         var isStrikethrough = false
-        var _isObfuscated = false  // Not rendered visually, but parsed for completeness
+        // Note: isObfuscated (§k) is parsed but not rendered visually
 
         var currentText = ""
         var i = processedInput.startIndex
@@ -485,21 +485,19 @@ struct MinecraftFormattedText: View {
                     isItalic = false
                     isUnderline = false
                     isStrikethrough = false
-                    _isObfuscated = false
                 } else {
                     switch code {
                     case "l": isBold = true
                     case "o": isItalic = true
                     case "n": isUnderline = true
                     case "m": isStrikethrough = true
-                    case "k": _isObfuscated = true
+                    case "k": break  // Obfuscated - parsed but not rendered
                     case "r": // Reset
                         currentColor = .white
                         isBold = false
                         isItalic = false
                         isUnderline = false
                         isStrikethrough = false
-                        _isObfuscated = false
                     default: break
                     }
                 }

@@ -28,6 +28,10 @@ struct ServerDetailView: View {
     @ViewBuilder
     private func tabContent(_ server: Server) -> some View {
         switch serverManager.selectedTab {
+        case .dashboard:
+            DashboardView(server: server)
+                .environmentObject(serverManager)
+                .padding(.top, 12)
         case .console:
             // Console view extends to top with fade effect
             ZStack(alignment: .topTrailing) {

@@ -161,9 +161,9 @@ struct SwiftTerminalView: NSViewRepresentable {
     }
 
     private func configureTerminal(_ terminal: TerminalView) {
-        // Set dark theme colors matching our app
+        // Set transparent background to let app's dark theme show through
         terminal.nativeForegroundColor = NSColor.white
-        terminal.nativeBackgroundColor = NSColor(red: 0.086, green: 0.086, blue: 0.094, alpha: 1.0)  // #161618
+        terminal.nativeBackgroundColor = NSColor.clear
 
         // Set cursor color
         terminal.caretColor = NSColor(red: 0.133, green: 0.773, blue: 0.369, alpha: 1.0)  // Green like our prompt
@@ -345,7 +345,7 @@ struct SelectableConsoleTextView: NSViewRepresentable {
     let messages: [ConsoleMessage]
     let backgroundColor: NSColor
 
-    init(messages: [ConsoleMessage], backgroundColor: NSColor = NSColor(calibratedRed: 0.05, green: 0.05, blue: 0.06, alpha: 1.0)) {
+    init(messages: [ConsoleMessage], backgroundColor: NSColor = .clear) {
         self.messages = messages
         self.backgroundColor = backgroundColor
     }
@@ -366,7 +366,7 @@ struct SelectableConsoleTextView: NSViewRepresentable {
         textView.isAutomaticTextReplacementEnabled = false
         textView.textContainerInset = NSSize(width: 12, height: 12)
         textView.backgroundColor = backgroundColor
-        textView.drawsBackground = true
+        textView.drawsBackground = backgroundColor != .clear
         textView.font = NSFont(name: "Menlo", size: 12) ?? NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
         textView.textColor = .white
         textView.insertionPointColor = .clear
@@ -379,7 +379,7 @@ struct SelectableConsoleTextView: NSViewRepresentable {
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
-        scrollView.drawsBackground = true
+        scrollView.drawsBackground = backgroundColor != .clear
         scrollView.backgroundColor = backgroundColor
         scrollView.documentView = textView
 
@@ -460,9 +460,15 @@ struct SelectableConsoleTextView: NSViewRepresentable {
             // mcwrap mode yields raw ANSI; fall back gracefully if not.
             let attr: AttributedString
             if message.rawANSI {
-                // Use the persistent parser to maintain color state across lines
-                // This is essential for truecolor gradients (like Oraxen's colored output)
-                attr = ansiParser.process(message.content)
+                if message.content.contains("\u{1B}") {
+                    // Use the persistent parser to maintain color state across lines
+                    // This is essential for truecolor gradients (like Oraxen's colored output)
+                    attr = ansiParser.process(message.content)
+                } else {
+                    // Some PTY backends may emit Minecraft/Adventure formatting without ANSI escapes.
+                    // Parse Minecraft color codes + MiniMessage/gradients so raw codes don't leak.
+                    attr = MinecraftColorParser.parse(message.content, defaultColor: message.level.textColor)
+                }
             } else {
                 // Include timestamp/level for non-PTY sources.
                 let line = "\(message.formattedTimestamp) \(message.content)"
@@ -535,6 +541,7 @@ struct SwiftTermConsoleView: View {
     @State private var hasRegisteredCallback = false
     @State private var pendingScrollback: String?
     @State private var hasFedScrollback = false
+    @State private var needsScrollbackResync = false
 
     // MARK: - Local mouse reporting disable (for selection)
 
@@ -595,6 +602,8 @@ struct SwiftTermConsoleView: View {
     // Warp-style input bar state
     @State private var commandText = ""
     @State private var showWarpUI = true  // Enable modern UI for mcwrap-pty
+    @State private var bridgeCompletions: [CompletionItem] = []  // Completions from bridge service
+    @State private var completionPreviewTask: Task<Void, Never>? = nil
 
     /// Check if the current server is using mcwrap-pty (which supports our enhanced UI)
     private var useEnhancedInputBar: Bool {
@@ -623,22 +632,36 @@ struct SwiftTermConsoleView: View {
     private var allCommands: [String] {
         // Reference published property to force SwiftUI to re-evaluate when command tree updates
         let updateCount = serverManager.commandTreeUpdateCount
+        let logger = DebugLogger.shared
 
-        guard let server = serverManager.selectedServer else { return fallbackCommands }
+        guard let server = serverManager.selectedServer else {
+            logger.log("allCommands: no server selected, returning fallback", category: .ui, verbose: true)
+            return fallbackCommands
+        }
 
         // Combine discovered commands with fallback
         var commands = Set(fallbackCommands)
+        logger.log("allCommands: starting with \(fallbackCommands.count) fallback commands", category: .ui, verbose: true)
 
         // Add dynamically discovered commands from Brigadier tree
         if let tree = serverManager.commandTree[server.id] {
+            let beforeCount = commands.count
             commands.formUnion(tree.rootCommands)
+            let oCommands = tree.rootCommands.filter { $0.lowercased().hasPrefix("o") }
+            logger.log("allCommands: added \(commands.count - beforeCount) from BrigadierTree (total root: \(tree.rootCommands.count), 'o' commands: \(oCommands.sorted()))", category: .ui)
+        } else {
+            logger.log("allCommands: no BrigadierTree for server \(server.id)", category: .ui)
         }
 
         // Also add commands from MCPanel Bridge's command tree (fetched via SFTP)
         let bridge = serverManager.bridgeService(for: server)
         if let bridgeTree = bridge.commandTree {
+            let beforeCount = commands.count
             commands.formUnion(bridgeTree.commands.keys)
-            print("[Suggestions] Using \(bridgeTree.commands.count) commands from bridge (updateCount=\(updateCount))")
+            let oCommands = bridgeTree.commands.keys.filter { $0.lowercased().hasPrefix("o") }
+            logger.log("allCommands: added \(commands.count - beforeCount) from bridge (total: \(bridgeTree.commands.count), 'o' commands: \(oCommands.sorted())) updateCount=\(updateCount)", category: .ui)
+        } else {
+            logger.log("allCommands: bridge.commandTree is nil for server \(server.id)", category: .ui)
         }
 
         // Add root commands from history
@@ -649,6 +672,10 @@ struct SwiftTermConsoleView: View {
             }
         }
 
+        // Log final 'o' commands
+        let finalOCommands = commands.filter { $0.lowercased().hasPrefix("o") }
+        logger.log("allCommands: final count \(commands.count), 'o' commands: \(finalOCommands.sorted())", category: .ui)
+
         return commands.sorted()
     }
 
@@ -656,21 +683,6 @@ struct SwiftTermConsoleView: View {
     private var commandHistory: [String] {
         guard let server = serverManager.selectedServer else { return [] }
         return serverManager.commandHistory[server.id]?.commands ?? []
-    }
-
-    /// Server status for quick action buttons
-    private var serverStatus: QuickActionsBar.ServerStatus {
-        guard let server = serverManager.selectedServer else { return .offline }
-        switch server.status {
-        case .online:
-            return .online
-        case .offline:
-            return .offline
-        case .starting, .stopping:
-            return .starting
-        case .unknown:
-            return .offline
-        }
     }
 
     var body: some View {
@@ -702,14 +714,6 @@ struct SwiftTermConsoleView: View {
             // Warp-style input bar (only for mcwrap-pty mode)
             if useEnhancedInputBar {
                 VStack(spacing: 8) {
-                    // Quick action buttons
-                    QuickActionsBar(
-                        onAction: { action in
-                            handleQuickAction(action)
-                        },
-                        serverStatus: serverStatus
-                    )
-
                     // Command input bar
                     CommandInputBar(
                         command: $commandText,
@@ -717,18 +721,21 @@ struct SwiftTermConsoleView: View {
                             submitCommand(command)
                         },
                         onTabComplete: {
-                            // Send tab to server for server-side completion
+                            // Request server-side completions from bridge
                             handleTabCompletion()
                         },
                         commandHistory: commandHistory,
                         baseSuggestions: allCommands,
-                        isConnected: isConnected
+                        bridgeCompletions: bridgeCompletions
                     )
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
-                .background(Color(nsColor: .windowBackgroundColor).opacity(0.8))
             }
+        }
+        .onChange(of: commandText) { _, newValue in
+            // Live completion preview: compute completions locally as the user types (no Tab needed).
+            updateCompletionPreview(buffer: newValue)
         }
         .onAppear {
             connectToServer()
@@ -736,31 +743,35 @@ struct SwiftTermConsoleView: View {
         .onDisappear {
             disconnectFromServer()
         }
-        .onChange(of: serverManager.selectedServer?.id) { _, _ in
+        .onChange(of: serverManager.selectedServer?.id) { oldId, _ in
             // Reconnect when server changes
             hasRegisteredCallback = false
             hasFedScrollback = false
             pendingScrollback = nil
+            needsScrollbackResync = false
             commandText = ""
-            disconnectFromServer()
+            if let oldId,
+               let oldServer = serverManager.servers.first(where: { $0.id == oldId }) {
+                disconnectFromServer(oldServer)
+            }
             connectToServer()
         }
         .onChange(of: serverManager.ptyConnected) { _, newValue in
-            // Re-register callback when PTY reconnects (e.g., after restart)
-            if let server = serverManager.selectedServer,
-               newValue[server.id] == true,
-               !hasRegisteredCallback,
-               terminalController != nil {
-                print("[Console] PTY reconnected, re-registering callback")
-                hasRegisteredCallback = true
-                registerPTYCallback()
-                disableMouseReportingLocally()
-                isConnected = true
-            } else if let server = serverManager.selectedServer,
-                      newValue[server.id] == false {
-                // Mark as disconnected but keep hasRegisteredCallback false so we re-register on reconnect
-                hasRegisteredCallback = false
-                isConnected = false
+            // Update isConnected state when PTY connection changes
+            if let server = serverManager.selectedServer {
+                let connected = newValue[server.id] == true
+                isConnected = connected
+
+                // Re-register callback when PTY reconnects (e.g., after restart) - only for terminal mode
+                if connected && !hasRegisteredCallback && terminalController != nil {
+                    print("[Console] PTY reconnected, re-registering callback")
+                    hasRegisteredCallback = true
+                    registerPTYCallback()
+                    disableMouseReportingLocally()
+                } else if !connected {
+                    // Mark callback as unregistered so we re-register on reconnect
+                    hasRegisteredCallback = false
+                }
             }
         }
         .onReceive(Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()) { _ in
@@ -804,34 +815,85 @@ struct SwiftTermConsoleView: View {
         }
     }
 
+    private func updateCompletionPreview(buffer: String) {
+        completionPreviewTask?.cancel()
+
+        // Don't show preview when empty; CommandInputBar will fall back to history/base suggestions if needed.
+        guard !buffer.isEmpty else {
+            bridgeCompletions = []
+            return
+        }
+        guard let server = serverManager.selectedServer else {
+            bridgeCompletions = []
+            return
+        }
+
+        let bridge = serverManager.bridgeService(for: server)
+        // Debounce slightly to avoid thrashing while typing fast.
+        completionPreviewTask = Task { @MainActor [buffer] in
+            try? await Task.sleep(nanoseconds: 40_000_000) // 40ms
+            guard !Task.isCancelled else { return }
+
+            let completions = bridge.getCompletions(buffer: buffer)
+            bridgeCompletions = completions.map {
+                CompletionItem(
+                    text: $0.text,
+                    tooltip: $0.tooltip,
+                    hasChildren: $0.hasChildren,
+                    isTypeHint: $0.isTypeHint
+                )
+            }
+        }
+    }
+
     private func handleTabCompletion() {
         guard let server = serverManager.selectedServer else { return }
 
         // Use local command tree completion (no network calls)
         let bridge = serverManager.bridgeService(for: server)
+        DebugLogger.shared.log("handleTabCompletion: buffer='\(commandText)'", category: .commands)
         let completions = bridge.getCompletions(buffer: commandText)
+        DebugLogger.shared.log("handleTabCompletion: got \(completions.count) completions: \(completions.prefix(5).map { $0.text })", category: .commands)
 
         if !completions.isEmpty {
             if completions.count == 1 {
-                // Single completion - auto-complete with space
-                commandText = completions[0].text + " "
-            } else {
-                // Multiple completions - find longest common prefix
-                let texts = completions.map { $0.text }
-                if let commonPrefix = longestCommonPrefix(texts), commonPrefix.count > commandText.count {
-                    // Extend to common prefix
-                    let parts = commandText.components(separatedBy: " ")
-                    if parts.count > 1 {
-                        // Replace last part with common prefix
-                        var newParts = Array(parts.dropLast())
-                        newParts.append(commonPrefix)
-                        commandText = newParts.joined(separator: " ")
-                    } else {
-                        commandText = commonPrefix
+                // Single completion - auto-complete immediately
+                let completion = completions[0]
+                if completion.isTypeHint {
+                    // Don't insert type-hints like "<greedy_string>" into the buffer.
+                    // Show it as a non-insertable hint in the grid instead.
+                    bridgeCompletions = [
+                        CompletionItem(
+                            text: completion.text,
+                            tooltip: completion.tooltip,
+                            hasChildren: completion.hasChildren,
+                            isTypeHint: completion.isTypeHint
+                        )
+                    ]
+                    return
+                }
+                let parts = commandText.components(separatedBy: " ")
+                if parts.count > 1 {
+                    var newParts = Array(parts.dropLast())
+                    newParts.append(completion.text)
+                    commandText = newParts.joined(separator: " ") + " "
+                } else {
+                    commandText = completion.text + " "
+                }
+                bridgeCompletions = []  // Clear completions
+
+                // Auto-trigger next completion if this item has children
+                if completion.hasChildren {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                        self.handleTabCompletion()
                     }
                 }
-                // TODO: Show completion picker UI for multiple options
+            } else {
+                // Multiple completions - show murex-style grid with hasChildren and isTypeHint info
+                bridgeCompletions = completions.map { CompletionItem(text: $0.text, tooltip: $0.tooltip, hasChildren: $0.hasChildren, isTypeHint: $0.isTypeHint) }
             }
+        } else {
+            bridgeCompletions = []
         }
     }
 
@@ -850,30 +912,12 @@ struct SwiftTermConsoleView: View {
         return prefix
     }
 
-    private func handleQuickAction(_ action: QuickActionsBar.QuickAction) {
-        guard let server = serverManager.selectedServer else { return }
-
-        Task {
-            switch action {
-            case .stop:
-                await serverManager.sendCommand("stop", to: server)
-            case .restart:
-                await serverManager.restartServer(server)
-            case .reload:
-                await serverManager.sendCommand("reload", to: server)
-            case .players:
-                await serverManager.sendCommand("list", to: server)
-            case .tps:
-                // Try both common TPS commands
-                await serverManager.sendCommand("tps", to: server)
-            }
-        }
-    }
-
     private func connectToServer() {
         guard let server = serverManager.selectedServer else { return }
 
         Task {
+            let wasConnected = await serverManager.isPTYConnected(for: server)
+
             // Detect available sessions
             await serverManager.detectPTYSessions(for: server)
 
@@ -881,38 +925,42 @@ struct SwiftTermConsoleView: View {
             if server.consoleMode == .logTail {
                 await serverManager.loadConsole(for: server)
             } else {
-                await serverManager.connectPTY(for: server)
+                await serverManager.acquirePTY(for: server, consumer: .console)
             }
 
+            let isNowConnected = await serverManager.isPTYConnected(for: server)
+
             await MainActor.run {
-                isConnected = serverManager.isPTYConnected(for: server)
+                isConnected = isNowConnected
                 // Register callback after connection
                 if !useEnhancedInputBar {
                     registerPTYCallback()
                 }
             }
 
-            // Fetch scrollback history after connecting (for PTY modes)
-            // This gives us the console history to display and allows bridge detection
-            if server.consoleMode != .logTail {
-                // In mcwrap mode we render via `consoleMessages` and hydrate on connect in ServerManager.
-                // For other PTY modes, feed scrollback into the terminal emulator.
-                if !useEnhancedInputBar, let scrollback = await serverManager.fetchScrollbackHistory(for: server) {
-                    await MainActor.run {
-                        // Process scrollback through bridge service to detect any bridge messages
-                        // This handles the case where bridge_ready event was sent before MCPanel connected
-                        let bridge = serverManager.bridgeService(for: server)
-                        let filteredScrollback = bridge.processOutput(scrollback)
+            let didConnect = !wasConnected && isNowConnected
+            let shouldFetchScrollback = !useEnhancedInputBar
+                && server.consoleMode != .logTail
+                && (didConnect || needsScrollbackResync)
 
-                        // Store filtered scrollback to be fed when terminal is ready
-                        // The timer will feed it once terminalController is available
-                        pendingScrollback = filteredScrollback
+            // Fetch scrollback history after connecting (or when we missed output while hidden).
+            // This gives us the console history to display and allows bridge detection.
+            if shouldFetchScrollback, let scrollback = await serverManager.fetchScrollbackHistory(for: server) {
+                await MainActor.run {
+                    // Process scrollback through bridge service to detect any bridge messages
+                    // This handles the case where bridge_ready event was sent before MCPanel connected
+                    let bridge = serverManager.bridgeService(for: server)
+                    let filteredScrollback = bridge.processOutput(scrollback)
 
-                        // If bridge was detected, start command discovery
-                        if bridge.bridgeDetected {
-                            print("[Bridge] Detected MCPanel Bridge v\(bridge.bridgeVersion ?? "?") on \(bridge.platform ?? "unknown")")
-                            serverManager.scrapeServerCommands(for: server)
-                        }
+                    // Store filtered scrollback to be fed when terminal is ready
+                    // The timer will feed it once terminalController is available
+                    pendingScrollback = filteredScrollback
+                    needsScrollbackResync = false
+
+                    // If bridge was detected, start command discovery
+                    if bridge.bridgeDetected {
+                        print("[Bridge] Detected MCPanel Bridge v\(bridge.bridgeVersion ?? "?") on \(bridge.platform ?? "unknown")")
+                        serverManager.scrapeServerCommands(for: server)
                     }
                 }
             }
@@ -926,15 +974,17 @@ struct SwiftTermConsoleView: View {
         }
     }
 
-    private func disconnectFromServer() {
-        guard let server = serverManager.selectedServer else { return }
+    private func disconnectFromServer(_ server: Server? = nil) {
+        guard let target = server ?? serverManager.selectedServer else { return }
 
         // Unregister callback
-        serverManager.unregisterPTYOutputCallback(for: server)
-
-        Task {
-            await serverManager.disconnectPTY(for: server)
+        serverManager.unregisterPTYOutputCallback(for: target)
+        hasRegisteredCallback = false
+        if !useEnhancedInputBar {
+            needsScrollbackResync = true
         }
+
+        serverManager.releasePTY(for: target, consumer: .console)
     }
 
     private func registerPTYCallback() {

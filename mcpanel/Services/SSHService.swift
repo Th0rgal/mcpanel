@@ -60,11 +60,58 @@ actor SSHService {
         process.standardOutput = outputPipe
         process.standardError = errorPipe
 
+        let logger = DebugLogger.shared
+        let shortCmd = String(command.prefix(60))
+        logger.log("execute: Starting process for '\(shortCmd)...'", category: .ssh, verbose: true)
+
+        // Accumulate output data asynchronously to avoid pipe buffer blocking
+        // Use a class wrapper to safely capture mutable state in concurrent closures
+        final class DataAccumulator: @unchecked Sendable {
+            var data = Data()
+            let lock = NSLock()
+            func append(_ newData: Data) {
+                lock.lock()
+                data.append(newData)
+                lock.unlock()
+            }
+            func getData() -> Data {
+                lock.lock()
+                defer { lock.unlock() }
+                return data
+            }
+        }
+
+        let outputAccumulator = DataAccumulator()
+        let errorAccumulator = DataAccumulator()
+
+        // Read output asynchronously to prevent pipe buffer from filling
+        let outputHandle = outputPipe.fileHandleForReading
+        let errorHandle = errorPipe.fileHandleForReading
+
+        outputHandle.readabilityHandler = { handle in
+            let data = handle.availableData
+            if !data.isEmpty {
+                outputAccumulator.append(data)
+            }
+        }
+
+        errorHandle.readabilityHandler = { handle in
+            let data = handle.availableData
+            if !data.isEmpty {
+                errorAccumulator.append(data)
+            }
+        }
+
         do {
             try process.run()
         } catch {
+            outputHandle.readabilityHandler = nil
+            errorHandle.readabilityHandler = nil
+            logger.log("execute: Process launch failed: \(error)", category: .ssh)
             throw SSHError.connectionFailed(error.localizedDescription)
         }
+
+        logger.log("execute: Process running, waiting up to \(Int(timeout))s", category: .ssh, verbose: true)
 
         // Wait with timeout
         let deadline = Date().addingTimeInterval(timeout)
@@ -72,21 +119,29 @@ actor SSHService {
             try await Task.sleep(nanoseconds: 100_000_000)  // 100ms
         }
 
+        // Clean up handlers
+        outputHandle.readabilityHandler = nil
+        errorHandle.readabilityHandler = nil
+
         if process.isRunning {
+            logger.log("execute: Process timed out after \(Int(timeout))s, terminating", category: .ssh)
             process.terminate()
             throw SSHError.timeout
         }
 
-        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+        // Read any remaining data
+        outputAccumulator.append(outputHandle.readDataToEndOfFile())
+        errorAccumulator.append(errorHandle.readDataToEndOfFile())
 
-        let output = String(data: outputData, encoding: .utf8) ?? ""
-        let errorOutput = String(data: errorData, encoding: .utf8) ?? ""
+        let output = String(data: outputAccumulator.getData(), encoding: .utf8) ?? ""
+        let errorOutput = String(data: errorAccumulator.getData(), encoding: .utf8) ?? ""
 
         if process.terminationStatus != 0 && !errorOutput.isEmpty {
+            logger.log("execute: Command failed with status \(process.terminationStatus): \(errorOutput.prefix(200))", category: .ssh)
             throw SSHError.commandFailed(errorOutput)
         }
 
+        logger.log("execute: Success, got \(output.count) bytes", category: .ssh, verbose: true)
         isConnected = true
         return output
     }
@@ -140,12 +195,17 @@ actor SSHService {
         }
 
         // SSH options for non-interactive use
+        // Use ControlMaster to share SSH connections and avoid rate limiting
+        let controlPath = "/tmp/mcpanel-ssh-\(server.host)-\(server.sshUsername)"
         args.append(contentsOf: [
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=10",
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "LogLevel=ERROR"
+            "-o", "LogLevel=ERROR",
+            "-o", "ControlMaster=auto",
+            "-o", "ControlPath=\(controlPath)",
+            "-o", "ControlPersist=60"
         ])
 
         // Port if non-standard
@@ -206,7 +266,7 @@ extension SSHService {
         let newFileName = plugin.isEnabled ? plugin.disabledFileName : plugin.enabledFileName
         let newPath = "\(pluginsPath)/\(newFileName)"
 
-        try await execute("mv '\(currentPath)' '\(newPath)'")
+        _ = try await execute("mv '\(currentPath)' '\(newPath)'")
     }
 
     /// Check if the server is running (via systemd)
@@ -474,7 +534,6 @@ extension SSHService {
         }
     }
 
-    /// Download a file via scp
     /// Read file contents from remote server via SSH cat command
     func readFile(at remotePath: String) async throws -> Data {
         let output = try await execute("cat '\(remotePath)'")
@@ -482,6 +541,30 @@ extension SSHService {
             throw SSHError.commandFailed("Failed to read file data")
         }
         return data
+    }
+
+    /// Read file contents quickly with a shorter timeout
+    /// Returns empty string if file doesn't exist (instead of throwing)
+    func readFileQuick(at remotePath: String) async throws -> String {
+        let logger = DebugLogger.shared
+        logger.log("readFileQuick: Reading \(remotePath)", category: .ssh)
+
+        let startTime = Date()
+        do {
+            // Read file directly - cat with redirection to suppress errors if file doesn't exist
+            let output = try await execute("cat '\(remotePath)' 2>/dev/null || echo ''", timeout: 15)
+            let elapsed = Date().timeIntervalSince(startTime)
+            logger.log("readFileQuick: Completed in \(String(format: "%.2f", elapsed))s, got \(output.count) bytes", category: .ssh)
+            return output
+        } catch {
+            let elapsed = Date().timeIntervalSince(startTime)
+            logger.log("readFileQuick: Failed after \(String(format: "%.2f", elapsed))s: \(error)", category: .ssh)
+            // Return empty string for non-timeout errors
+            if case SSHError.timeout = error {
+                throw error
+            }
+            return ""
+        }
     }
 
     func downloadFile(remotePath: String, localPath: String) async throws {

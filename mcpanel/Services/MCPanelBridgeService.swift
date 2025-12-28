@@ -8,10 +8,119 @@
 import Foundation
 import Combine
 
+// MARK: - Performance History
+
+/// Stores time-series performance data for charts and sparklines
+@MainActor
+class PerformanceHistory: ObservableObject {
+
+    struct DataPoint: Identifiable {
+        let id = UUID()
+        let timestamp: Date
+        let value: Double
+    }
+
+    /// Full resolution: last 30 min at 500ms = 3,600 points
+    @Published var tpsHistory: [DataPoint] = []
+    @Published var msptHistory: [DataPoint] = []
+    @Published var memoryHistory: [DataPoint] = []
+    @Published var playerCountHistory: [DataPoint] = []
+
+    private let maxRecentSamples = 3600  // 30 min × 2/sec
+
+    /// Downsampled: last 6 hours at 30s averages = 720 points
+    @Published var hourlyTpsHistory: [DataPoint] = []
+    @Published var hourlyMemoryHistory: [DataPoint] = []
+
+    private let maxHourlySamples = 720
+
+    /// Track when we last downsampled
+    private var lastDownsampleTime: Date = Date()
+    private let downsampleInterval: TimeInterval = 30  // Downsample every 30 seconds
+
+    /// Add a new sample from status update
+    func addSample(_ status: StatusUpdatePayload) {
+        let now = Date()
+
+        // Add to recent history
+        tpsHistory.append(DataPoint(timestamp: now, value: status.tps))
+        if let mspt = status.mspt {
+            msptHistory.append(DataPoint(timestamp: now, value: mspt))
+        }
+        let memoryPercent = Double(status.usedMemoryMB) / Double(max(status.maxMemoryMB, 1)) * 100
+        memoryHistory.append(DataPoint(timestamp: now, value: memoryPercent))
+        playerCountHistory.append(DataPoint(timestamp: now, value: Double(status.playerCount)))
+
+        // Trim old data
+        trimHistory()
+
+        // Downsample for hourly history
+        if now.timeIntervalSince(lastDownsampleTime) >= downsampleInterval {
+            downsampleToHourly()
+            lastDownsampleTime = now
+        }
+    }
+
+    /// Trim recent history to keep within memory limits
+    private func trimHistory() {
+        if tpsHistory.count > maxRecentSamples {
+            tpsHistory.removeFirst(tpsHistory.count - maxRecentSamples)
+        }
+        if msptHistory.count > maxRecentSamples {
+            msptHistory.removeFirst(msptHistory.count - maxRecentSamples)
+        }
+        if memoryHistory.count > maxRecentSamples {
+            memoryHistory.removeFirst(memoryHistory.count - maxRecentSamples)
+        }
+        if playerCountHistory.count > maxRecentSamples {
+            playerCountHistory.removeFirst(playerCountHistory.count - maxRecentSamples)
+        }
+    }
+
+    /// Create downsampled hourly averages
+    private func downsampleToHourly() {
+        let now = Date()
+
+        // Average recent TPS samples (last 30 seconds worth = ~60 samples at 500ms)
+        let recentTps = tpsHistory.suffix(60)
+        if !recentTps.isEmpty {
+            let avgTps = recentTps.reduce(0.0) { $0 + $1.value } / Double(recentTps.count)
+            hourlyTpsHistory.append(DataPoint(timestamp: now, value: avgTps))
+
+            if hourlyTpsHistory.count > maxHourlySamples {
+                hourlyTpsHistory.removeFirst()
+            }
+        }
+
+        // Average recent memory samples
+        let recentMem = memoryHistory.suffix(60)
+        if !recentMem.isEmpty {
+            let avgMem = recentMem.reduce(0.0) { $0 + $1.value } / Double(recentMem.count)
+            hourlyMemoryHistory.append(DataPoint(timestamp: now, value: avgMem))
+
+            if hourlyMemoryHistory.count > maxHourlySamples {
+                hourlyMemoryHistory.removeFirst()
+            }
+        }
+    }
+
+    /// Clear all history (e.g., on disconnect)
+    func clear() {
+        tpsHistory = []
+        msptHistory = []
+        memoryHistory = []
+        playerCountHistory = []
+        hourlyTpsHistory = []
+        hourlyMemoryHistory = []
+    }
+}
+
 /// Service that manages communication with the MCPanel Bridge plugin.
 /// Detects bridge presence and provides enhanced features when available.
 @MainActor
 class MCPanelBridgeService: ObservableObject {
+
+    private let logger = DebugLogger.shared
 
     // MARK: - Published State
 
@@ -30,26 +139,34 @@ class MCPanelBridgeService: ObservableObject {
     /// Latest command tree from bridge
     @Published var commandTree: CommandTreePayload?
 
-    /// Latest player list from bridge
-    @Published var playerList: PlayerListPayload?
+    /// Latest server status from periodic broadcasts
+    @Published var serverStatus: StatusUpdatePayload?
 
-    /// Latest server status from bridge
-    @Published var serverStatus: ServerStatusPayload?
+    /// Latest player list from periodic broadcasts
+    @Published var playerList: PlayersUpdatePayload?
+
+    /// Plugin registries (key: "plugin:type", value: list of values)
+    @Published var registries: [String: [String]] = [:]
+
+    /// Performance history for charts and sparklines
+    @Published var performanceHistory = PerformanceHistory()
+
+    /// Whether dashboard is active (for high-frequency updates)
+    @Published var dashboardActive: Bool = false
 
     // MARK: - Private State
 
-    /// Server reference for RCON access
+    /// Server reference for SSH access
     private var server: Server?
 
-    /// SSH service for RCON commands
+    /// SSH service for file operations
     private var sshService: SSHService?
 
     // MARK: - Initialization
 
     init() {}
 
-    /// Configure RCON for sending requests
-    /// This is the cleaner approach - requests go via RCON, responses come via OSC
+    /// Configure server and SSH service for file operations
     func configure(server: Server, sshService: SSHService) {
         self.server = server
         self.sshService = sshService
@@ -83,7 +200,7 @@ class MCPanelBridgeService: ObservableObject {
     // MARK: - Event Handling
 
     private func handleEvent(_ event: MCPanelEvent) {
-        print("[Bridge] Received event: \(event.event)")
+        logger.log("[Bridge] Received event: \(event.event)", category: .bridge, verbose: true)
 
         switch event.event {
         case "mcpanel_bridge_ready":
@@ -121,6 +238,55 @@ class MCPanelBridgeService: ObservableObject {
                 await fetchCommandTree()
             }
 
+        case "status_update":
+            if let payload = event.payload?.decode(StatusUpdatePayload.self) {
+                serverStatus = payload
+                // If we receive status updates, the bridge is definitely working
+                // (mcpanel_bridge_ready may have been sent before we connected)
+                if !bridgeDetected {
+                    bridgeDetected = true
+                    print("[Bridge] Bridge detected via status_update (missed mcpanel_bridge_ready)")
+                }
+                // Record to performance history for charts
+                performanceHistory.addSample(payload)
+                // Check for performance alerts
+                if let server = server {
+                    PerformanceAlertService.shared.checkPerformance(
+                        status: payload,
+                        serverName: server.name,
+                        serverId: server.id
+                    )
+                }
+                logger.log("[Bridge] Status update: TPS=\(String(format: "%.1f", payload.tps)), Players=\(payload.playerCount)/\(payload.maxPlayers), Memory=\(payload.usedMemoryMB)/\(payload.maxMemoryMB)MB", category: .bridge, verbose: true)
+            }
+
+        case "players_update":
+            if let payload = event.payload?.decode(PlayersUpdatePayload.self) {
+                playerList = payload
+                // If we receive player updates, the bridge is definitely working
+                if !bridgeDetected {
+                    bridgeDetected = true
+                    print("[Bridge] Bridge detected via players_update (missed mcpanel_bridge_ready)")
+                }
+                logger.log("[Bridge] Players update: \(payload.count) players online", category: .bridge, verbose: true)
+            }
+
+        case "registry_update":
+            if let payload = event.payload?.decode(RegistryUpdatePayload.self) {
+                let key = "\(payload.plugin):\(payload.type)"
+                registries[key] = payload.values
+                logger.log("[Bridge] Registry update: \(key) with \(payload.values.count) values", category: .bridge)
+            }
+
+        case "commands_updated":
+            if let payload = event.payload?.decode(CommandsUpdatedPayload.self) {
+                logger.log("[Bridge] Commands updated: \(payload.reason)", category: .bridge)
+                // Refresh command tree from the updated commands.json
+                Task {
+                    await fetchCommandTree()
+                }
+            }
+
         default:
             print("[Bridge] Unknown event: \(event.event)")
         }
@@ -130,68 +296,11 @@ class MCPanelBridgeService: ObservableObject {
 
     private func handleResponse(_ response: MCPanelResponse) {
         print("[Bridge] Received OSC response: \(response.type) for request \(response.id)")
-        // Note: Responses now come directly via RCON, this is only for backwards compatibility
-        updateCachedData(from: response)
-    }
-
-    // MARK: - Request Sending
-
-    /// Send a request to the bridge via RCON and get response directly.
-    /// The bridge returns the response in sender.sendMessage(), which is captured by RCON.
-    /// This is synchronous and doesn't depend on PTY/stdout for responses.
-    func sendRequest(_ request: MCPanelRequest, timeout: TimeInterval = 5.0) async throws -> MCPanelResponse {
-        guard bridgeDetected else {
-            throw BridgeError.notDetected
-        }
-
-        guard let server = server,
-              let sshService = sshService,
-              let rconPassword = server.rconPassword,
-              !rconPassword.isEmpty else {
-            throw BridgeError.rconNotConfigured
-        }
-
-        let rconHost = server.rconHost ?? "127.0.0.1"
-        let rconPort = server.rconPort ?? 25575
-
-        // Encode request as console command (mcpanel <base64>)
-        let requestCommand = MCPanelBridgeProtocol.encodeRequest(request)
-
-        // Send request via RCON and get response directly
-        let rconOutput = try await sshService.sendRCONCommand(
-            requestCommand,
-            password: rconPassword,
-            port: rconPort,
-            host: rconHost
-        )
-
-        // Parse the RCON output for the MCPanel response
-        // Format: MCPANEL:<base64-json>
-        guard let response = MCPanelBridgeProtocol.parseRCONResponse(rconOutput) else {
-            print("[Bridge] Failed to parse RCON response: \(rconOutput)")
-            throw BridgeError.invalidResponse
-        }
-
         // Update cached data based on response type
-        updateCachedData(from: response)
-
-        return response
-    }
-
-    /// Update cached data from a response
-    private func updateCachedData(from response: MCPanelResponse) {
         switch response.type {
         case "command_tree":
             if let payload = response.payload.decode(CommandTreePayload.self) {
                 commandTree = payload
-            }
-        case "player_list":
-            if let payload = response.payload.decode(PlayerListPayload.self) {
-                playerList = payload
-            }
-        case "server_status":
-            if let payload = response.payload.decode(ServerStatusPayload.self) {
-                serverStatus = payload
             }
         default:
             break
@@ -204,8 +313,10 @@ class MCPanelBridgeService: ObservableObject {
     /// This is done locally without any RCON calls - fast and doesn't spam the console.
     func getCompletions(buffer: String) -> [CompletionPayload.Completion] {
         guard let commandTree = commandTree else {
+            logger.log("getCompletions: no command tree available (self.commandTree is nil)", category: .commands)
             return []
         }
+        logger.log("getCompletions: commandTree has \(commandTree.commands.count) commands", category: .commands, verbose: true)
 
         // Remove leading slash if present
         let cleanBuffer = buffer.hasPrefix("/") ? String(buffer.dropFirst()) : buffer
@@ -217,16 +328,38 @@ class MCPanelBridgeService: ObservableObject {
         // If only one part (or part with no space), complete command names
         if parts.count == 1 {
             let prefix = parts[0].lowercased()
-            return commandTree.commands.keys
+            let results = commandTree.commands.keys
                 .filter { $0.lowercased().hasPrefix(prefix) }
                 .sorted()
                 .prefix(50)
-                .map { CompletionPayload.Completion(text: $0, tooltip: commandTree.commands[$0]?.description) }
+                .map { key -> CompletionPayload.Completion in
+                    let node = commandTree.commands[key]
+                    let hasChildren = node?.children != nil && !(node?.children?.isEmpty ?? true)
+                    return CompletionPayload.Completion(text: key, tooltip: node?.description, hasChildren: hasChildren)
+                }
+            logger.logAutocomplete(prefix: prefix, resultCount: results.count)
+            return results
         }
 
         // Multiple parts - try to complete subcommands/arguments
         let commandName = parts[0].lowercased()
-        guard let commandNode = commandTree.commands[commandName] else {
+
+        // Try exact match first, then case-insensitive
+        var commandNode: CommandTreePayload.CommandNode?
+        if let node = commandTree.commands[commandName] {
+            commandNode = node
+        } else {
+            // Case-insensitive fallback
+            for (key, node) in commandTree.commands {
+                if key.lowercased() == commandName {
+                    commandNode = node
+                    break
+                }
+            }
+        }
+
+        guard let commandNode = commandNode else {
+            logger.log("getCompletions: command '\(commandName)' not found in tree (keys: \(commandTree.commands.keys.filter { $0.lowercased().hasPrefix(commandName.prefix(2)) }.sorted()))", category: .commands, verbose: true)
             return []
         }
 
@@ -255,10 +388,14 @@ class MCPanelBridgeService: ObservableObject {
         let partialArg = currentParts.last ?? ""
 
         guard let children = currentNode.children else {
+            logger.log("getCompletions: no children for '\(parts.joined(separator: " "))' - node has no children", category: .commands)
             return []
         }
 
-        return getCompletionsFromChildren(children, prefix: partialArg)
+        logger.log("getCompletions: found \(children.count) children for '\(commandName)', partial='\(partialArg)'", category: .commands, verbose: true)
+        let results = getCompletionsFromChildren(children, prefix: partialArg)
+        logger.logAutocomplete(prefix: cleanBuffer, resultCount: results.count)
+        return results
     }
 
     /// Find a matching child node for the typed value.
@@ -302,24 +439,35 @@ class MCPanelBridgeService: ObservableObject {
         let lowercasedPrefix = prefix.lowercased()
 
         for (key, node) in children {
-            if node.isArgument {
+            let hasChildren = node.children != nil && !(node.children?.isEmpty ?? true)
+            // Some exports omit `type` for argument nodes but still name them like "<arg>".
+            // Treat any "<...>" key as an argument node so we don't surface placeholders as literals.
+            let isArgumentNode = node.isArgument || (key.hasPrefix("<") && key.hasSuffix(">"))
+
+            if isArgumentNode {
                 // For arguments, show examples if available
                 if let examples = node.examples, !examples.isEmpty {
                     for example in examples {
                         if example.lowercased().hasPrefix(lowercasedPrefix) {
                             let tooltip = node.type.map { "(\($0))" }
-                            completions.append(CompletionPayload.Completion(text: example, tooltip: tooltip))
+                            // Examples are real values that can be inserted
+                            completions.append(CompletionPayload.Completion(text: example, tooltip: tooltip, hasChildren: hasChildren, isTypeHint: false))
                         }
                     }
                 } else {
-                    // Show placeholder like <player> with type info
-                    let tooltip = node.type.map { "Type: \($0)" }
-                    completions.append(CompletionPayload.Completion(text: key, tooltip: tooltip))
+                    // No examples - only show a placeholder when the user hasn't started typing yet.
+                    // This is a type hint (shouldn't be inserted literally).
+                    if lowercasedPrefix.isEmpty {
+                        // Format: show the type name, not <argname>, when available.
+                        let displayText = node.type ?? key.trimmingCharacters(in: CharacterSet(charactersIn: "<>"))
+                        let tooltip = "Type a \(displayText) value"
+                        completions.append(CompletionPayload.Completion(text: "<\(displayText)>", tooltip: tooltip, hasChildren: hasChildren, isTypeHint: true))
+                    }
                 }
             } else {
                 // Literal (subcommand) - match prefix
                 if key.lowercased().hasPrefix(lowercasedPrefix) {
-                    completions.append(CompletionPayload.Completion(text: key, tooltip: node.description))
+                    completions.append(CompletionPayload.Completion(text: key, tooltip: node.description, hasChildren: hasChildren, isTypeHint: false))
                 }
             }
         }
@@ -327,81 +475,56 @@ class MCPanelBridgeService: ObservableObject {
         return completions.sorted { $0.text < $1.text }.prefix(50).map { $0 }
     }
 
-    /// Fetch the command tree from the commands.json file via SFTP.
+    /// Fetch the command tree from the commands.json file via SSH cat.
     /// This is generated by the bridge plugin on startup and after /reload.
     func fetchCommandTree() async {
         guard let server = server, let sshService = sshService else {
-            print("[Bridge] fetchCommandTree: server or sshService is nil")
+            logger.log("fetchCommandTree: server or sshService is nil", category: .bridge)
             return
         }
 
         // Path to commands.json in the plugin's data folder
         let commandsPath = "\(server.effectivePluginsPath)/MCPanelBridge/commands.json"
-        print("[Bridge] Fetching command tree from: \(commandsPath)")
+        logger.logCommandTreeFetch(serverPath: commandsPath, method: "SSH")
 
         do {
-            // Read the file via SFTP
-            let jsonData = try await sshService.readFile(at: commandsPath)
-            print("[Bridge] Read \(jsonData.count) bytes from commands.json")
+            // Use a quick check + read to avoid hanging on non-existent files
+            // The -e test returns quickly if file doesn't exist
+            let jsonString = try await sshService.readFileQuick(at: commandsPath)
+
+            guard let jsonData = jsonString.data(using: .utf8), !jsonString.isEmpty else {
+                logger.log("commands.json is empty or not found", category: .commands)
+                return
+            }
+
+            logger.log("Read \(jsonData.count) bytes from commands.json", category: .commands)
 
             if let payload = try? JSONDecoder().decode(CommandTreePayload.self, from: jsonData) {
                 commandTree = payload
-                let oCommands = payload.commands.keys.filter { $0.hasPrefix("o") }
-                print("[Bridge] Loaded \(payload.commands.count) commands, starting with 'o': \(oCommands.sorted())")
-            } else {
-                print("[Bridge] Failed to decode CommandTreePayload from JSON")
-                // Try to see the raw JSON for debugging
-                if let jsonString = String(data: jsonData, encoding: .utf8)?.prefix(500) {
-                    print("[Bridge] Raw JSON preview: \(jsonString)")
+                logger.logCommandTreeResult(commandCount: payload.commands.count, source: "SSH/commands.json")
+
+                // Log some sample commands for debugging
+                let sampleCommands = payload.commands.keys.sorted().prefix(10)
+                logger.log("Sample commands: \(sampleCommands.joined(separator: ", "))", category: .commands, verbose: true)
+
+                // Log commands with children (subcommands)
+                let commandsWithChildren = payload.commands.filter { $0.value.children != nil && !($0.value.children?.isEmpty ?? true) }
+                logger.log("Commands with children: \(commandsWithChildren.count)", category: .commands)
+
+                // Log oraxen specifically - check both cases
+                let oraxenKeys = payload.commands.keys.filter { $0.lowercased() == "oraxen" }
+                logger.log("oraxen key variations: \(oraxenKeys)", category: .commands)
+                if let oraxen = payload.commands["oraxen"] ?? payload.commands["Oraxen"] {
+                    logger.log("oraxen children: \(oraxen.children?.keys.sorted().prefix(10) ?? [])", category: .commands)
                 }
+            } else {
+                logger.log("Failed to decode CommandTreePayload from JSON", category: .commands)
+                // Try to see the raw JSON for debugging
+                let preview = String(jsonString.prefix(500))
+                logger.log("Raw JSON preview: \(preview)", category: .commands, verbose: true)
             }
         } catch {
-            print("[Bridge] Failed to fetch commands.json: \(error)")
-            // Fall back to RCON if file not found
-            await fetchCommandTreeViaRCON()
-        }
-    }
-
-    /// Fallback: Fetch command tree via RCON if SFTP fails.
-    private func fetchCommandTreeViaRCON() async {
-        guard bridgeDetected else { return }
-
-        do {
-            let response = try await sendRequest(.commands())
-            if let payload = response.payload.decode(CommandTreePayload.self) {
-                commandTree = payload
-                print("[Bridge] Fetched \(payload.commands.count) commands via RCON")
-            }
-        } catch {
-            print("[Bridge] Command tree fetch via RCON failed: \(error)")
-        }
-    }
-
-    /// Fetch player list from the bridge.
-    func fetchPlayers() async {
-        guard bridgeDetected else { return }
-
-        do {
-            let response = try await sendRequest(.players())
-            if let payload = response.payload.decode(PlayerListPayload.self) {
-                playerList = payload
-            }
-        } catch {
-            print("[Bridge] Player list fetch failed: \(error)")
-        }
-    }
-
-    /// Fetch server status from the bridge.
-    func fetchStatus() async {
-        guard bridgeDetected else { return }
-
-        do {
-            let response = try await sendRequest(.status())
-            if let payload = response.payload.decode(ServerStatusPayload.self) {
-                serverStatus = payload
-            }
-        } catch {
-            print("[Bridge] Status fetch failed: \(error)")
+            logger.logCommandTreeError(error, source: "SSH/commands.json")
         }
     }
 
@@ -414,13 +537,32 @@ class MCPanelBridgeService: ObservableObject {
         platform = nil
         features = []
         commandTree = nil
-        playerList = nil
         serverStatus = nil
+        playerList = nil
+        registries = [:]
+        performanceHistory.clear()
+        dashboardActive = false
     }
 
     /// Check if bridge supports a specific feature
     func hasFeature(_ feature: String) -> Bool {
         return bridgeDetected && features.contains(feature)
+    }
+
+    /// Get registry values for a specific plugin and type (e.g., "oraxen:items")
+    func getRegistryValues(plugin: String, type: String) -> [String] {
+        return registries["\(plugin):\(type)"] ?? []
+    }
+
+    /// Get completions from a registry, filtered by prefix
+    func getRegistryCompletions(plugin: String, type: String, prefix: String) -> [CompletionPayload.Completion] {
+        let values = getRegistryValues(plugin: plugin, type: type)
+        let lowercasedPrefix = prefix.lowercased()
+
+        return values
+            .filter { $0.lowercased().hasPrefix(lowercasedPrefix) }
+            .prefix(50)
+            .map { CompletionPayload.Completion(text: $0, tooltip: "\(plugin) \(type)", hasChildren: false, isTypeHint: false) }
     }
 }
 
@@ -428,26 +570,17 @@ class MCPanelBridgeService: ObservableObject {
 
 enum BridgeError: LocalizedError {
     case notDetected
-    case rconNotConfigured
-    case rconFailed(String)
     case timeout
     case disconnected
-    case invalidResponse
 
     var errorDescription: String? {
         switch self {
         case .notDetected:
             return "MCPanel Bridge plugin not detected on server"
-        case .rconNotConfigured:
-            return "RCON not configured - set RCON password in server settings"
-        case .rconFailed(let message):
-            return "RCON request failed: \(message)"
         case .timeout:
             return "Request timed out"
         case .disconnected:
             return "Disconnected from server"
-        case .invalidResponse:
-            return "Invalid response from bridge"
         }
     }
 }

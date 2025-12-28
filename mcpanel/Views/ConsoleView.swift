@@ -32,7 +32,7 @@ struct ConsoleView: View {
                     if server.consoleMode == .logTail {
                         await serverManager.loadConsole(for: server)
                     } else {
-                        await serverManager.connectPTY(for: server)
+                        await serverManager.acquirePTY(for: server, consumer: .console)
                     }
                 }
             }
@@ -40,9 +40,7 @@ struct ConsoleView: View {
         .onDisappear {
             // Disconnect PTY when leaving
             if let server = serverManager.selectedServer {
-                Task {
-                    await serverManager.disconnectPTY(for: server)
-                }
+                serverManager.releasePTY(for: server, consumer: .console)
             }
         }
     }
@@ -320,8 +318,8 @@ struct ConsoleLineView: View {
     // Parse content and apply color codes (ANSI or Minecraft)
     private var coloredContent: AttributedString {
         if message.rawANSI {
-            // Use ANSI parser directly for PTY output
-            return ANSIParser.parse(message.content)
+            // PTY output can contain ANSI escapes or Minecraft/Adventure formatting; support both.
+            return MinecraftColorParser.parse(message.content, defaultColor: message.level.textColor)
         } else {
             // Use the Minecraft color parser for log output
             return MinecraftColorParser.parse(message.content, defaultColor: message.level.textColor)
