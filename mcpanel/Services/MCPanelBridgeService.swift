@@ -25,6 +25,9 @@ class PerformanceHistory: ObservableObject {
     @Published var msptHistory: [DataPoint] = []
     @Published var memoryHistory: [DataPoint] = []
     @Published var playerCountHistory: [DataPoint] = []
+    @Published var cpuHistory: [DataPoint] = []
+    @Published var systemCpuHistory: [DataPoint] = []
+    @Published var threadCountHistory: [DataPoint] = []
 
     private let maxRecentSamples = 3600  // 30 min × 2/sec
 
@@ -51,6 +54,17 @@ class PerformanceHistory: ObservableObject {
         memoryHistory.append(DataPoint(timestamp: now, value: memoryPercent))
         playerCountHistory.append(DataPoint(timestamp: now, value: Double(status.playerCount)))
 
+        // Add CPU/thread metrics if available
+        if let cpu = status.cpuUsagePercent {
+            cpuHistory.append(DataPoint(timestamp: now, value: cpu))
+        }
+        if let sysCpu = status.systemCpuPercent {
+            systemCpuHistory.append(DataPoint(timestamp: now, value: sysCpu))
+        }
+        if let threads = status.threadCount {
+            threadCountHistory.append(DataPoint(timestamp: now, value: Double(threads)))
+        }
+
         // Trim old data
         trimHistory()
 
@@ -74,6 +88,15 @@ class PerformanceHistory: ObservableObject {
         }
         if playerCountHistory.count > maxRecentSamples {
             playerCountHistory.removeFirst(playerCountHistory.count - maxRecentSamples)
+        }
+        if cpuHistory.count > maxRecentSamples {
+            cpuHistory.removeFirst(cpuHistory.count - maxRecentSamples)
+        }
+        if systemCpuHistory.count > maxRecentSamples {
+            systemCpuHistory.removeFirst(systemCpuHistory.count - maxRecentSamples)
+        }
+        if threadCountHistory.count > maxRecentSamples {
+            threadCountHistory.removeFirst(threadCountHistory.count - maxRecentSamples)
         }
     }
 
@@ -110,6 +133,9 @@ class PerformanceHistory: ObservableObject {
         msptHistory = []
         memoryHistory = []
         playerCountHistory = []
+        cpuHistory = []
+        systemCpuHistory = []
+        threadCountHistory = []
         hourlyTpsHistory = []
         hourlyMemoryHistory = []
     }

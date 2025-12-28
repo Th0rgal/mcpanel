@@ -261,6 +261,40 @@ public class MCPanelBridgePlugin extends JavaPlugin implements Listener {
         long maxMemoryMB = runtime.maxMemory() / (1024 * 1024);
         long uptimeSeconds = (System.currentTimeMillis() - serverStartTime) / 1000;
 
+        // Collect CPU and thread metrics via JMX
+        Double cpuUsage = null;
+        Double systemCpu = null;
+        Integer threadCount = null;
+        Integer peakThreadCount = null;
+
+        try {
+            java.lang.management.OperatingSystemMXBean osBean =
+                    java.lang.management.ManagementFactory.getOperatingSystemMXBean();
+
+            // Try to get process CPU load (requires com.sun.management)
+            if (osBean instanceof com.sun.management.OperatingSystemMXBean sunBean) {
+                double processCpu = sunBean.getProcessCpuLoad();
+                if (processCpu >= 0) {
+                    cpuUsage = processCpu * 100.0;
+                }
+                double sysCpu = sunBean.getCpuLoad();
+                if (sysCpu >= 0) {
+                    systemCpu = sysCpu * 100.0;
+                }
+            }
+        } catch (Exception e) {
+            // CPU metrics not available on this JVM
+        }
+
+        try {
+            java.lang.management.ThreadMXBean threadBean =
+                    java.lang.management.ManagementFactory.getThreadMXBean();
+            threadCount = threadBean.getThreadCount();
+            peakThreadCount = threadBean.getPeakThreadCount();
+        } catch (Exception e) {
+            // Thread metrics not available
+        }
+
         return new MCPanelEvent.StatusPayload(
                 Math.min(tps, 20.0), // Cap at 20 TPS
                 mspt,
@@ -268,7 +302,11 @@ public class MCPanelBridgePlugin extends JavaPlugin implements Listener {
                 Bukkit.getMaxPlayers(),
                 usedMemoryMB,
                 maxMemoryMB,
-                uptimeSeconds
+                uptimeSeconds,
+                cpuUsage,
+                systemCpu,
+                threadCount,
+                peakThreadCount
         );
     }
 

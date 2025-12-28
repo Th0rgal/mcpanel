@@ -80,8 +80,6 @@ struct DashboardView: View {
                     metricsGrid
 
                     performanceChart
-
-                    playerSection
                 } else if serverManager.ptyConnected[server.id] == true {
                     // PTY connected but bridge not detected yet - show waiting state
                     waitingForBridge
@@ -127,7 +125,10 @@ struct DashboardView: View {
     // MARK: - Server Header
 
     private var serverHeader: some View {
-        HStack(spacing: 16) {
+        let bridge = serverManager.bridgeServices[server.id]
+        let status = bridge?.serverStatus
+
+        return HStack(spacing: 16) {
             // Server icon
             ZStack {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -153,11 +154,14 @@ struct DashboardView: View {
                 HStack(spacing: 8) {
                     GlassStatusBadge(status: server.status)
 
-                    if let bridge = serverManager.bridgeServices[server.id],
-                       let status = bridge.serverStatus {
-                        Text("Uptime: \(formatUptime(status.uptimeSeconds))")
-                            .font(.system(size: 12))
-                            .foregroundColor(.white.opacity(0.5))
+                    // Uptime badge (moved from separate card)
+                    if let status = status {
+                        UptimeBadge(seconds: status.uptimeSeconds)
+                    }
+
+                    // Player count badge
+                    if let status = status {
+                        PlayerCountBadge(count: status.playerCount, max: status.maxPlayers)
                     }
                 }
             }
@@ -200,54 +204,35 @@ struct DashboardView: View {
         let history = bridge?.performanceHistory
 
         return VStack(spacing: 16) {
-            // Primary metrics row
+            // Primary row: Tick Performance + Resource Monitor (gotop-style)
             HStack(spacing: 16) {
-                // TPS Card - Most important metric
-                PrimaryMetricCard(
-                    title: "TPS",
-                    value: status.map { String(format: "%.2f", $0.tps) } ?? "--",
-                    maxValue: "20.00",
-                    icon: "gauge.with.dots.needle.bottom.50percent",
-                    color: tpsColor(status?.tps),
-                    sparklineData: history?.tpsHistory.suffix(60).map { $0.value } ?? [],
-                    chartMaxValue: 20,
-                    trend: calculateTrend(history?.tpsHistory.suffix(20).map { $0.value } ?? [])
+                // Unified TPS + MSPT Card
+                TickPerformanceCard(
+                    tps: status?.tps,
+                    mspt: status?.mspt,
+                    tpsHistory: history?.tpsHistory ?? [],
+                    msptHistory: history?.msptHistory ?? []
                 )
 
-                // MSPT Card
-                PrimaryMetricCard(
-                    title: "MSPT",
-                    value: status?.mspt.map { String(format: "%.1f", $0) } ?? "--",
-                    maxValue: "50ms",
-                    icon: "clock.badge",
-                    color: msptColor(status?.mspt),
-                    sparklineData: history?.msptHistory.suffix(60).map { $0.value } ?? [],
-                    chartMaxValue: 100,
-                    trend: calculateTrend(history?.msptHistory.suffix(20).map { $0.value } ?? [], inverted: true)
+                // Memory + CPU (gotop-style)
+                ResourceMonitorCard(
+                    usedMemoryMB: status?.usedMemoryMB ?? 0,
+                    maxMemoryMB: status?.maxMemoryMB ?? 1,
+                    cpuPercent: status?.cpuUsagePercent,
+                    systemCpuPercent: status?.systemCpuPercent,
+                    threadCount: status?.threadCount,
+                    memoryHistory: history?.memoryHistory ?? [],
+                    cpuHistory: history?.cpuHistory ?? []
                 )
             }
 
-            // Secondary metrics row
-            HStack(spacing: 16) {
-                // Memory Card with precise values
-                MemoryMetricCard(
-                    usedMB: status?.usedMemoryMB ?? 0,
-                    maxMB: status?.maxMemoryMB ?? 1,
-                    color: memoryColor(status)
-                )
-
-                // Players Card
-                PlayersMetricCard(
-                    current: status?.playerCount ?? 0,
-                    max: status?.maxPlayers ?? 0,
-                    sparklineData: history?.playerCountHistory.suffix(60).map { $0.value } ?? []
-                )
-
-                // Uptime Card
-                UptimeMetricCard(
-                    uptimeSeconds: status?.uptimeSeconds ?? 0
-                )
-            }
+            // Player indicator (clickable, replaces separate player card)
+            ClickablePlayerIndicator(
+                playerCount: status?.playerCount ?? 0,
+                maxPlayers: status?.maxPlayers ?? 0,
+                players: bridge?.playerList?.players ?? [],
+                sparklineData: history?.playerCountHistory.suffix(60).map { $0.value } ?? []
+            )
         }
     }
 
@@ -1342,28 +1327,191 @@ struct PlayersMetricCard: View {
     }
 }
 
-// MARK: - Uptime Metric Card
+// MARK: - Uptime Badge (compact, for server header)
 
-struct UptimeMetricCard: View {
-    let uptimeSeconds: Int64
+struct UptimeBadge: View {
+    let seconds: Int64
+
+    private var formattedUptime: String {
+        let days = seconds / 86400
+        let hours = (seconds % 86400) / 3600
+        let minutes = (seconds % 3600) / 60
+
+        if days > 0 { return "\(days)d \(hours)h" }
+        if hours > 0 { return "\(hours)h \(minutes)m" }
+        return "\(minutes)m"
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "clock")
+                .font(.system(size: 9))
+            Text(formattedUptime)
+                .font(.system(size: 11, weight: .medium))
+        }
+        .foregroundColor(.white.opacity(0.6))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Capsule().fill(Color.white.opacity(0.1)))
+    }
+}
+
+// MARK: - Player Count Badge (compact, for server header)
+
+struct PlayerCountBadge: View {
+    let count: Int
+    let max: Int
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "person.fill")
+                .font(.system(size: 9))
+            Text("\(count)/\(max)")
+                .font(.system(size: 11, weight: .medium))
+        }
+        .foregroundColor(count > 0 ? .blue : .white.opacity(0.5))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Capsule().fill(count > 0 ? Color.blue.opacity(0.15) : Color.white.opacity(0.1)))
+    }
+}
+
+// MARK: - Tick Health Indicator
+
+struct TickHealthIndicator: View {
+    let tps: Double?
+    let mspt: Double?
+
+    private var health: (text: String, color: Color) {
+        guard let tps = tps else { return ("--", .gray) }
+        if tps >= 19.5 && (mspt ?? 0) < 40 {
+            return ("Excellent", Color(hex: "22C55E"))
+        }
+        if tps >= 18 && (mspt ?? 0) < 50 {
+            return ("Good", Color(hex: "22C55E"))
+        }
+        if tps >= 15 {
+            return ("Fair", Color(hex: "EAB308"))
+        }
+        return ("Poor", Color(hex: "EF4444"))
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(health.color)
+                .frame(width: 6, height: 6)
+            Text(health.text)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(health.color)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Capsule().fill(health.color.opacity(0.15)))
+    }
+}
+
+// MARK: - Dual Sparkline View (TPS + MSPT overlay)
+
+struct DualSparklineView: View {
+    let primaryData: [Double]
+    let secondaryData: [Double]
+    let primaryColor: Color
+    let secondaryColor: Color
+    let primaryMax: Double
+    let secondaryMax: Double
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                // Secondary line (MSPT) - behind, dashed
+                if secondaryData.count > 1 {
+                    Path { path in
+                        for (index, value) in secondaryData.enumerated() {
+                            let x = geometry.size.width * CGFloat(index) / CGFloat(secondaryData.count - 1)
+                            let normalizedValue = value / secondaryMax
+                            let y = geometry.size.height * (1 - CGFloat(min(normalizedValue, 1.0)))
+
+                            if index == 0 {
+                                path.move(to: CGPoint(x: x, y: y))
+                            } else {
+                                path.addLine(to: CGPoint(x: x, y: y))
+                            }
+                        }
+                    }
+                    .stroke(secondaryColor.opacity(0.4), style: StrokeStyle(lineWidth: 1.5, dash: [4, 4]))
+                }
+
+                // Primary line (TPS) - in front, solid
+                if primaryData.count > 1 {
+                    Path { path in
+                        for (index, value) in primaryData.enumerated() {
+                            let x = geometry.size.width * CGFloat(index) / CGFloat(primaryData.count - 1)
+                            let normalizedValue = value / primaryMax
+                            let y = geometry.size.height * (1 - CGFloat(min(normalizedValue, 1.0)))
+
+                            if index == 0 {
+                                path.move(to: CGPoint(x: x, y: y))
+                            } else {
+                                path.addLine(to: CGPoint(x: x, y: y))
+                            }
+                        }
+                    }
+                    .stroke(
+                        LinearGradient(
+                            colors: [primaryColor.opacity(0.6), primaryColor],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        ),
+                        style: StrokeStyle(lineWidth: 2, lineCap: .round)
+                    )
+                }
+
+                // Reference line at top (TPS 20)
+                Path { path in
+                    path.move(to: CGPoint(x: 0, y: 0))
+                    path.addLine(to: CGPoint(x: geometry.size.width, y: 0))
+                }
+                .stroke(Color.white.opacity(0.15), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+            }
+        }
+    }
+}
+
+// MARK: - Tick Performance Card (merged TPS + MSPT)
+
+struct TickPerformanceCard: View {
+    let tps: Double?
+    let mspt: Double?
+    let tpsHistory: [PerformanceHistory.DataPoint]
+    let msptHistory: [PerformanceHistory.DataPoint]
 
     @State private var isHovered = false
 
-    private var days: Int64 { uptimeSeconds / 86400 }
-    private var hours: Int64 { (uptimeSeconds % 86400) / 3600 }
-    private var minutes: Int64 { (uptimeSeconds % 3600) / 60 }
-    private var seconds: Int64 { uptimeSeconds % 60 }
+    private var tpsColor: Color {
+        guard let tps = tps else { return .gray }
+        if tps >= 18 { return Color(hex: "22C55E") }
+        if tps >= 15 { return Color(hex: "EAB308") }
+        return Color(hex: "EF4444")
+    }
+
+    private var msptColor: Color {
+        guard let mspt = mspt else { return .gray }
+        if mspt < 40 { return Color(hex: "22C55E") }
+        if mspt < 50 { return Color(hex: "EAB308") }
+        return Color(hex: "EF4444")
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Header
             HStack {
                 HStack(spacing: 6) {
-                    Image(systemName: "clock.fill")
+                    Image(systemName: "gauge.with.dots.needle.bottom.50percent")
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(.purple)
+                        .foregroundColor(tpsColor)
 
-                    Text("Uptime")
+                    Text("TICK PERFORMANCE")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundColor(.white.opacity(0.6))
                         .textCase(.uppercase)
@@ -1371,85 +1519,380 @@ struct UptimeMetricCard: View {
                 }
 
                 Spacer()
+
+                TickHealthIndicator(tps: tps, mspt: mspt)
             }
-            .padding(.bottom, 10)
+            .padding(.bottom, 12)
 
-            // Time display
-            if days > 0 {
-                HStack(alignment: .firstTextBaseline, spacing: 2) {
-                    Text("\(days)")
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
-                        .foregroundColor(.white)
-                    Text("d")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.white.opacity(0.5))
-
-                    Text("\(hours)")
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                        .foregroundColor(.white.opacity(0.8))
-                        .padding(.leading, 4)
-                    Text("h")
-                        .font(.system(size: 12, weight: .medium))
+            // Main metrics row
+            HStack(alignment: .bottom, spacing: 20) {
+                // TPS - Primary (large)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("TPS")
+                        .font(.system(size: 10, weight: .medium))
                         .foregroundColor(.white.opacity(0.4))
 
-                    Text("\(minutes)")
-                        .font(.system(size: 16, weight: .bold, design: .rounded))
-                        .foregroundColor(.white.opacity(0.6))
-                        .padding(.leading, 2)
-                    Text("m")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.white.opacity(0.3))
-                }
-            } else if hours > 0 {
-                HStack(alignment: .firstTextBaseline, spacing: 2) {
-                    Text("\(hours)")
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
-                        .foregroundColor(.white)
-                    Text("h")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.white.opacity(0.5))
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text(tps.map { String(format: "%.2f", $0) } ?? "--")
+                            .font(.system(size: 42, weight: .bold, design: .rounded))
+                            .foregroundColor(.white)
 
-                    Text("\(minutes)")
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                        .foregroundColor(.white.opacity(0.8))
-                        .padding(.leading, 4)
-                    Text("m")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.white.opacity(0.4))
+                        Text("/ 20")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(.white.opacity(0.4))
+                    }
                 }
-            } else {
-                HStack(alignment: .firstTextBaseline, spacing: 2) {
-                    Text("\(minutes)")
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
-                        .foregroundColor(.white)
-                    Text("m")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.white.opacity(0.5))
 
-                    Text("\(seconds)")
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                        .foregroundColor(.white.opacity(0.8))
-                        .padding(.leading, 4)
-                    Text("s")
-                        .font(.system(size: 12, weight: .medium))
+                // Divider
+                Rectangle()
+                    .fill(Color.white.opacity(0.1))
+                    .frame(width: 1, height: 50)
+
+                // MSPT - Secondary (smaller)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("MSPT")
+                        .font(.system(size: 10, weight: .medium))
                         .foregroundColor(.white.opacity(0.4))
+
+                    HStack(alignment: .firstTextBaseline, spacing: 2) {
+                        Text(mspt.map { String(format: "%.1f", $0) } ?? "--")
+                            .font(.system(size: 28, weight: .bold, design: .rounded))
+                            .foregroundColor(msptColor)
+
+                        Text("ms")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.white.opacity(0.4))
+                    }
+
+                    Text(mspt.map { $0 < 50 ? "< 50ms target" : "Above target" } ?? "")
+                        .font(.system(size: 9))
+                        .foregroundColor(msptColor.opacity(0.7))
                 }
+
+                Spacer()
             }
+            .padding(.bottom, 16)
 
-            Spacer()
-                .frame(height: 24)
+            // Dual sparkline
+            DualSparklineView(
+                primaryData: tpsHistory.suffix(60).map { $0.value },
+                secondaryData: msptHistory.suffix(60).map { $0.value },
+                primaryColor: tpsColor,
+                secondaryColor: msptColor,
+                primaryMax: 20,
+                secondaryMax: 100
+            )
+            .frame(height: 48)
         }
-        .padding(16)
+        .padding(20)
         .frame(maxWidth: .infinity)
         .background {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(.ultraThinMaterial)
                 .overlay {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(Color.purple.opacity(isHovered ? 0.3 : 0.15), lineWidth: 1)
+                        .stroke(tpsColor.opacity(isHovered ? 0.3 : 0.15), lineWidth: 1)
                 }
         }
-        .scaleEffect(isHovered ? 1.01 : 1.0)
+        .scaleEffect(isHovered ? 1.005 : 1.0)
+        .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isHovered)
+        .onHover { isHovered = $0 }
+    }
+}
+
+// MARK: - Gotop Resource Bar (historical mini-bars + current value)
+
+struct GotopResourceBar: View {
+    let label: String
+    let value: Double
+    let maxValue: Double
+    let displayValue: String
+    let displayMax: String?
+    let color: Color
+    let history: [Double]
+
+    private var percentage: Double {
+        value / max(maxValue, 1)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // Label row
+            HStack {
+                Text(label)
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.6))
+
+                Spacer()
+
+                HStack(spacing: 4) {
+                    Text(displayValue)
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundColor(.white)
+
+                    if let displayMax = displayMax {
+                        Text("/")
+                            .font(.system(size: 10))
+                            .foregroundColor(.white.opacity(0.3))
+                        Text(displayMax)
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.5))
+                    }
+
+                    Text(String(format: "%.0f%%", percentage * 100))
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundColor(color)
+                        .frame(width: 36, alignment: .trailing)
+                }
+            }
+
+            // Gotop-style bar with history segments
+            GeometryReader { geo in
+                HStack(spacing: 1) {
+                    // Historical bars (mini bar chart)
+                    ForEach(Array(history.enumerated()), id: \.offset) { index, histValue in
+                        let barPercent = histValue / max(maxValue, 1)
+                        RoundedRectangle(cornerRadius: 1)
+                            .fill(color.opacity(0.3 + (Double(index) / Double(max(history.count, 1))) * 0.4))
+                            .frame(height: geo.size.height * min(barPercent, 1.0))
+                            .frame(maxHeight: .infinity, alignment: .bottom)
+                    }
+
+                    // Current value bar (brighter)
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(
+                            LinearGradient(
+                                colors: [color.opacity(0.7), color],
+                                startPoint: .bottom,
+                                endPoint: .top
+                            )
+                        )
+                        .frame(width: 4, height: geo.size.height * min(percentage, 1.0))
+                        .frame(maxHeight: .infinity, alignment: .bottom)
+                }
+            }
+            .frame(height: 24)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color.white.opacity(0.05))
+            )
+        }
+    }
+}
+
+// MARK: - Resource Monitor Card (Memory + CPU gotop-style)
+
+struct ResourceMonitorCard: View {
+    let usedMemoryMB: Int64
+    let maxMemoryMB: Int64
+    let cpuPercent: Double?
+    let systemCpuPercent: Double?
+    let threadCount: Int?
+    let memoryHistory: [PerformanceHistory.DataPoint]
+    let cpuHistory: [PerformanceHistory.DataPoint]
+
+    @State private var isHovered = false
+
+    private var memoryPercent: Double {
+        Double(usedMemoryMB) / Double(max(maxMemoryMB, 1))
+    }
+
+    private var memoryColor: Color {
+        if memoryPercent < 0.7 { return Color(hex: "22C55E") }
+        if memoryPercent < 0.85 { return Color(hex: "EAB308") }
+        return Color(hex: "EF4444")
+    }
+
+    private var cpuColor: Color {
+        guard let cpu = cpuPercent else { return .gray }
+        if cpu < 50 { return Color(hex: "3B82F6") }  // Blue
+        if cpu < 80 { return Color(hex: "EAB308") }
+        return Color(hex: "EF4444")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            HStack {
+                HStack(spacing: 6) {
+                    Image(systemName: "chart.bar.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.blue)
+
+                    Text("RESOURCES")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.6))
+                        .textCase(.uppercase)
+                        .tracking(0.5)
+                }
+
+                Spacer()
+
+                // Thread count badge
+                if let threads = threadCount {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.triangle.branch")
+                            .font(.system(size: 9))
+                        Text("\(threads) threads")
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                    .foregroundColor(.white.opacity(0.5))
+                }
+            }
+            .padding(.bottom, 16)
+
+            // Memory bar
+            GotopResourceBar(
+                label: "MEM",
+                value: Double(usedMemoryMB),
+                maxValue: Double(maxMemoryMB),
+                displayValue: String(format: "%.2f GB", Double(usedMemoryMB) / 1024),
+                displayMax: String(format: "%.1f GB", Double(maxMemoryMB) / 1024),
+                color: memoryColor,
+                history: memoryHistory.suffix(30).map { $0.value }
+            )
+            .padding(.bottom, 12)
+
+            // CPU bar (if available)
+            if let cpu = cpuPercent {
+                GotopResourceBar(
+                    label: "CPU",
+                    value: cpu,
+                    maxValue: 100,
+                    displayValue: String(format: "%.1f%%", cpu),
+                    displayMax: nil,
+                    color: cpuColor,
+                    history: cpuHistory.suffix(30).map { $0.value }
+                )
+            } else {
+                // CPU not available placeholder
+                HStack {
+                    Text("CPU")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.4))
+                    Spacer()
+                    Text("N/A")
+                        .font(.system(size: 11))
+                        .foregroundColor(.white.opacity(0.3))
+                }
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity)
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.blue.opacity(isHovered ? 0.3 : 0.15), lineWidth: 1)
+                }
+        }
+        .scaleEffect(isHovered ? 1.005 : 1.0)
+        .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isHovered)
+        .onHover { isHovered = $0 }
+    }
+}
+
+// MARK: - Clickable Player Indicator (expandable)
+
+struct ClickablePlayerIndicator: View {
+    let playerCount: Int
+    let maxPlayers: Int
+    let players: [PlayersUpdatePayload.PlayerInfo]
+    let sparklineData: [Double]
+
+    @State private var isExpanded = false
+    @State private var isHovered = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Clickable header
+            Button(action: { withAnimation(.spring()) { isExpanded.toggle() } }) {
+                HStack(spacing: 16) {
+                    // Player icon with count
+                    ZStack {
+                        Circle()
+                            .fill(playerCount > 0 ? Color.blue.opacity(0.2) : Color.white.opacity(0.1))
+                            .frame(width: 48, height: 48)
+
+                        Image(systemName: "person.2.fill")
+                            .font(.system(size: 20))
+                            .foregroundColor(playerCount > 0 ? .blue : .white.opacity(0.4))
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("ONLINE PLAYERS")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.6))
+                            .textCase(.uppercase)
+                            .tracking(0.5)
+
+                        HStack(alignment: .firstTextBaseline, spacing: 4) {
+                            Text("\(playerCount)")
+                                .font(.system(size: 28, weight: .bold, design: .rounded))
+                                .foregroundColor(.white)
+
+                            Text("/ \(maxPlayers)")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(.white.opacity(0.4))
+                        }
+                    }
+
+                    Spacer()
+
+                    // Mini sparkline
+                    if !sparklineData.isEmpty {
+                        SparklineView(data: sparklineData, color: .blue, maxValue: Double(maxPlayers))
+                            .frame(width: 80, height: 32)
+                    }
+
+                    // Expand indicator
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white.opacity(0.5))
+                }
+                .padding(16)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            // Expandable player grid
+            if isExpanded && !players.isEmpty {
+                Divider()
+                    .background(Color.white.opacity(0.1))
+
+                PlayerGridView(players: players)
+                    .padding(16)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            } else if isExpanded && players.isEmpty {
+                Divider()
+                    .background(Color.white.opacity(0.1))
+
+                HStack {
+                    Spacer()
+                    VStack(spacing: 8) {
+                        Image(systemName: "person.slash")
+                            .font(.system(size: 24))
+                            .foregroundColor(.white.opacity(0.3))
+                        Text("No players online")
+                            .font(.system(size: 12))
+                            .foregroundColor(.white.opacity(0.4))
+                    }
+                    .padding(.vertical, 20)
+                    Spacer()
+                }
+                .transition(.opacity)
+            }
+        }
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.blue.opacity(isHovered ? 0.3 : 0.15), lineWidth: 1)
+                }
+        }
+        .scaleEffect(isHovered ? 1.003 : 1.0)
         .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isHovered)
         .onHover { isHovered = $0 }
     }

@@ -158,7 +158,7 @@ public class MCPanelEvent extends MCPanelMessage {
     public record PlayerPayload(String name, String uuid) {}
 
     /**
-     * Status update payload with TPS, memory, and basic info.
+     * Status update payload with TPS, memory, CPU, and basic info.
      */
     public record StatusPayload(
             double tps,
@@ -167,7 +167,12 @@ public class MCPanelEvent extends MCPanelMessage {
             int maxPlayers,
             long usedMemoryMB,
             long maxMemoryMB,
-            long uptimeSeconds
+            long uptimeSeconds,
+            // CPU and thread metrics (may be null if unavailable)
+            Double cpuUsagePercent,      // JVM process CPU usage 0-100
+            Double systemCpuPercent,     // System-wide CPU usage 0-100
+            Integer threadCount,         // Active thread count
+            Integer peakThreadCount      // Peak thread count since JVM start
     ) {}
 
     /**

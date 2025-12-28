@@ -173,6 +173,11 @@ struct StatusUpdatePayload: Codable {
     let usedMemoryMB: Int64
     let maxMemoryMB: Int64
     let uptimeSeconds: Int64
+    // CPU and thread metrics (may be nil if unavailable on server JVM)
+    let cpuUsagePercent: Double?
+    let systemCpuPercent: Double?
+    let threadCount: Int?
+    let peakThreadCount: Int?
 }
 
 // MARK: - Players Update Payload (periodic player list broadcast)
