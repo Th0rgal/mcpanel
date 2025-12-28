@@ -127,3 +127,6 @@ target/
 # Cargo lock (optional, but common for binaries)
 # Cargo.lock
 
+### Gradle ###
+.gradle/
+**/.gradle/
