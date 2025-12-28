@@ -297,7 +297,7 @@ struct DashboardView: View {
             if let bridge = serverManager.bridgeServices[server.id],
                !bridge.performanceHistory.tpsHistory.isEmpty {
                 PerformanceChartView(history: bridge.performanceHistory)
-                    .frame(height: 200)
+                    .frame(height: 220)
             } else {
                 // Empty state
                 HStack {
@@ -312,7 +312,7 @@ struct DashboardView: View {
                     }
                     Spacer()
                 }
-                .frame(height: 200)
+                .frame(height: 220)
             }
         }
         .padding(20)
@@ -840,6 +840,7 @@ struct SparklineView: View {
 struct PerformanceChartView: View {
     @ObservedObject var history: PerformanceHistory
     @State private var selectedTimeRange: TimeRange = .fiveMinutes
+    @State private var selectedTime: Date?
 
     enum TimeRange: String, CaseIterable {
         case oneMinute = "1m"
@@ -866,6 +867,20 @@ struct PerformanceChartView: View {
         let lineWidth: Double
     }
 
+    private struct LegendItem: Identifiable {
+        let id = UUID()
+        let label: String
+        let color: Color
+        let isAccent: Bool
+    }
+
+    private struct SeriesValue: Identifiable {
+        let id = UUID()
+        let label: String
+        let value: String
+        let color: Color
+    }
+
     private func coreColor(_ index: Int, total: Int) -> Color {
         let count = max(total, 1)
         let hue = 0.52 + (Double(index) / Double(count)) * 0.18
@@ -874,6 +889,52 @@ struct PerformanceChartView: View {
 
     private func normalizedTps(_ value: Double) -> Double {
         min(max((value / 20.0) * 100.0, 0), 100)
+    }
+
+    private func baseTimeline(_ fallback: [PerformanceHistory.DataPoint]...) -> [Date] {
+        for series in fallback where !series.isEmpty {
+            return series.map { $0.timestamp }
+        }
+        return []
+    }
+
+    private func nearestTime(to target: Date, in times: [Date]) -> Date? {
+        guard !times.isEmpty else { return nil }
+        var low = 0
+        var high = times.count - 1
+        while low < high {
+            let mid = (low + high) / 2
+            if times[mid] < target {
+                low = mid + 1
+            } else {
+                high = mid
+            }
+        }
+        let idx = low
+        if idx == 0 { return times.first }
+        let prev = times[idx - 1]
+        let next = times[idx]
+        return abs(prev.timeIntervalSince(target)) <= abs(next.timeIntervalSince(target)) ? prev : next
+    }
+
+    private func nearestValue(in series: [PerformanceHistory.DataPoint], at time: Date) -> Double? {
+        guard !series.isEmpty else { return nil }
+        var low = 0
+        var high = series.count - 1
+        while low < high {
+            let mid = (low + high) / 2
+            if series[mid].timestamp < time {
+                low = mid + 1
+            } else {
+                high = mid
+            }
+        }
+        let idx = low
+        if idx == 0 { return series.first?.value }
+        let prev = series[idx - 1]
+        let next = series[idx]
+        let chosen = abs(prev.timestamp.timeIntervalSince(time)) <= abs(next.timestamp.timeIntervalSince(time)) ? prev : next
+        return chosen.value
     }
 
     private func buildSeriesPoints(
@@ -975,6 +1036,80 @@ struct PerformanceChartView: View {
         return seriesPoints
     }
 
+    private func buildLegend(perCoreCount: Int, hasCpu: Bool, hasSystemCpu: Bool) -> [LegendItem] {
+        var items: [LegendItem] = [
+            LegendItem(label: "TPS", color: Color(hex: "22C55E"), isAccent: true),
+            LegendItem(label: "RAM", color: Color(hex: "A855F7"), isAccent: true),
+            LegendItem(label: "Net RX", color: Color(hex: "22D3EE"), isAccent: false),
+            LegendItem(label: "Net TX", color: Color(hex: "0EA5E9"), isAccent: false)
+        ]
+
+        if perCoreCount > 0 {
+            items.insert(LegendItem(label: "CPU Cores (\(perCoreCount))", color: Color(hex: "3B82F6"), isAccent: true), at: 2)
+        } else if hasCpu {
+            items.insert(LegendItem(label: "CPU", color: Color(hex: "3B82F6"), isAccent: true), at: 2)
+        } else if hasSystemCpu {
+            items.insert(LegendItem(label: "CPU (SYS)", color: Color(hex: "3B82F6"), isAccent: true), at: 2)
+        }
+
+        return items
+    }
+
+    private func buildSeriesValues(
+        at time: Date,
+        tpsData: [PerformanceHistory.DataPoint],
+        memoryData: [PerformanceHistory.DataPoint],
+        cpuData: [PerformanceHistory.DataPoint],
+        systemCpuData: [PerformanceHistory.DataPoint],
+        perCoreData: [[PerformanceHistory.DataPoint]],
+        rxData: [PerformanceHistory.DataPoint],
+        txData: [PerformanceHistory.DataPoint]
+    ) -> [SeriesValue] {
+        var values: [SeriesValue] = []
+
+        if let tps = nearestValue(in: tpsData, at: time) {
+            values.append(SeriesValue(label: "TPS", value: String(format: "%.2f", tps), color: Color(hex: "22C55E")))
+        }
+        if let mem = nearestValue(in: memoryData, at: time) {
+            values.append(SeriesValue(label: "RAM", value: String(format: "%.0f%%", mem), color: Color(hex: "A855F7")))
+        }
+
+        if !perCoreData.isEmpty {
+            let coreValues = perCoreData.enumerated().compactMap { index, series -> SeriesValue? in
+                guard let value = nearestValue(in: series, at: time) else { return nil }
+                return SeriesValue(label: "C\(index + 1)", value: String(format: "%.0f%%", value), color: coreColor(index, total: perCoreData.count))
+            }
+            values.append(contentsOf: coreValues)
+        } else if let cpu = nearestValue(in: cpuData, at: time) {
+            values.append(SeriesValue(label: "CPU", value: String(format: "%.1f%%", cpu), color: Color(hex: "3B82F6")))
+        } else if let cpu = nearestValue(in: systemCpuData, at: time) {
+            values.append(SeriesValue(label: "CPU (SYS)", value: String(format: "%.1f%%", cpu), color: Color(hex: "3B82F6").opacity(0.9)))
+        }
+
+        if let rx = nearestValue(in: rxData, at: time) {
+            let label = formatBytesPerSecond(rx)
+            values.append(SeriesValue(label: "Net RX", value: label, color: Color(hex: "22D3EE")))
+        }
+
+        if let tx = nearestValue(in: txData, at: time) {
+            let label = formatBytesPerSecond(tx)
+            values.append(SeriesValue(label: "Net TX", value: label, color: Color(hex: "0EA5E9")))
+        }
+
+        return values
+    }
+
+    private func formatBytesPerSecond(_ value: Double) -> String {
+        let units = ["B/s", "KB/s", "MB/s", "GB/s"]
+        var number = value
+        var unitIndex = 0
+        while number >= 1024 && unitIndex < units.count - 1 {
+            number /= 1024
+            unitIndex += 1
+        }
+        return String(format: "%.1f %@", number, units[unitIndex])
+    }
+
     var body: some View {
         VStack(spacing: 12) {
             // Time range selector
@@ -1009,6 +1144,7 @@ struct PerformanceChartView: View {
             let rxData = Array(history.networkRxHistory.suffix(sampleCount))
             let txData = Array(history.networkTxHistory.suffix(sampleCount))
 
+            let baseTimeline = baseTimeline(tpsData, memoryData, cpuData, systemCpuData, rxData, txData)
             let seriesPoints = buildSeriesPoints(
                 tpsData: tpsData,
                 memoryData: memoryData,
@@ -1017,6 +1153,11 @@ struct PerformanceChartView: View {
                 perCoreData: perCoreData,
                 rxData: rxData,
                 txData: txData
+            )
+            let legendItems = buildLegend(
+                perCoreCount: perCoreData.count,
+                hasCpu: !cpuData.isEmpty,
+                hasSystemCpu: !systemCpuData.isEmpty
             )
 
             if !seriesPoints.isEmpty {
@@ -1030,6 +1171,12 @@ struct PerformanceChartView: View {
                         .foregroundStyle(point.color)
                         .lineStyle(StrokeStyle(lineWidth: point.lineWidth))
                         .interpolationMethod(.catmullRom)
+                    }
+
+                    if let selectedTime {
+                        RuleMark(x: .value("Time", selectedTime))
+                            .foregroundStyle(Color.white.opacity(0.25))
+                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
                     }
                 }
                 .chartYScale(domain: 0...100)
@@ -1047,7 +1194,130 @@ struct PerformanceChartView: View {
                             .foregroundStyle(Color.white.opacity(0.1))
                     }
                 }
-                .chartLegend(position: .bottom, alignment: .leading)
+                .chartLegend(.hidden)
+                .chartOverlay { proxy in
+                    GeometryReader { geo in
+                        Rectangle()
+                            .fill(Color.clear)
+                            .contentShape(Rectangle())
+                            .gesture(
+                                DragGesture(minimumDistance: 0)
+                                    .onChanged { value in
+                                        guard let rawTime: Date = proxy.value(atX: value.location.x),
+                                              let snapped = nearestTime(to: rawTime, in: baseTimeline) else {
+                                            selectedTime = nil
+                                            return
+                                        }
+                                        selectedTime = snapped
+                                    }
+                                    .onEnded { _ in
+                                        selectedTime = nil
+                                    }
+                            )
+                            .onHover { hovering in
+                                if !hovering {
+                                    selectedTime = nil
+                                }
+                            }
+
+                        if let selectedTime,
+                           let xPos = proxy.position(forX: selectedTime) {
+                            let clampedX = min(max(xPos, 0), geo.size.width)
+                            Rectangle()
+                                .fill(Color.white.opacity(0.15))
+                                .frame(width: 1)
+                                .position(x: clampedX, y: geo.size.height / 2)
+
+                            let values = buildSeriesValues(
+                                at: selectedTime,
+                                tpsData: tpsData,
+                                memoryData: memoryData,
+                                cpuData: cpuData,
+                                systemCpuData: systemCpuData,
+                                perCoreData: perCoreData,
+                                rxData: rxData,
+                                txData: txData
+                            )
+
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(selectedTime, style: .time)
+                                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                    .foregroundColor(.white.opacity(0.7))
+
+                                let primary = values.filter { !$0.label.hasPrefix("C") }
+                                ForEach(primary) { item in
+                                    HStack(spacing: 6) {
+                                        Circle()
+                                            .fill(item.color)
+                                            .frame(width: 6, height: 6)
+                                        Text(item.label)
+                                            .font(.system(size: 10, weight: .semibold))
+                                            .foregroundColor(.white.opacity(0.8))
+                                        Spacer()
+                                        Text(item.value)
+                                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                            .foregroundColor(.white)
+                                    }
+                                }
+
+                                let cores = values.filter { $0.label.hasPrefix("C") }
+                                if !cores.isEmpty {
+                                    Divider()
+                                        .background(Color.white.opacity(0.1))
+
+                                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
+                                        ForEach(cores) { item in
+                                            HStack(spacing: 6) {
+                                                Circle()
+                                                    .fill(item.color)
+                                                    .frame(width: 5, height: 5)
+                                                Text(item.label)
+                                                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                                    .foregroundColor(.white.opacity(0.7))
+                                                Spacer()
+                                                Text(item.value)
+                                                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                                                    .foregroundColor(.white.opacity(0.9))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            .padding(10)
+                            .background(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .fill(Color(hex: "141416").opacity(0.95))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                            .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                                    )
+                            )
+                            .frame(maxWidth: 240)
+                            .position(x: min(clampedX + 130, geo.size.width - 140), y: 70)
+                        }
+                    }
+                }
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(legendItems) { item in
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(item.color)
+                                    .frame(width: item.isAccent ? 8 : 6, height: item.isAccent ? 8 : 6)
+                                Text(item.label)
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundColor(.white.opacity(0.75))
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(
+                                Capsule()
+                                    .fill(Color.white.opacity(item.isAccent ? 0.12 : 0.08))
+                            )
+                        }
+                    }
+                }
 
                 Text("All series normalized to % (TPS scaled to 0–100; bandwidth scaled to peak in range).")
                     .font(.system(size: 10))
