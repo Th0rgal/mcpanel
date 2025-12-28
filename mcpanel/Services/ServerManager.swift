@@ -103,6 +103,7 @@ class ServerManager: ObservableObject {
     private var ptyStreamTasks: [UUID: Task<Void, Never>] = [:]
     private var ptyDisconnectTasks: [UUID: Task<Void, Never>] = [:]
     private var restartWatchdogTasks: [UUID: Task<Void, Never>] = [:]
+    private var mcwrapReattachTasks: [UUID: Task<Void, Never>] = [:]
     private let persistence = PersistenceService()
     private var statusRefreshTask: Task<Void, Never>?
 
@@ -114,8 +115,12 @@ class ServerManager: ObservableObject {
     private var lastPTYOutputAt: [UUID: Date] = [:]
     private var restartRequestedAt: [UUID: Date] = [:]
     private var lastPTYOutputWasNotRunning: [UUID: Bool] = [:]
+    private var lastMcwrapReattachAt: [UUID: Date] = [:]
     private var ptyConsumers: [UUID: Set<PTYConsumer>] = [:]
     private let ptyDisconnectGraceSeconds: TimeInterval = 10
+    private let mcwrapReattachCooldownSeconds: TimeInterval = 8
+    private let mcwrapReattachMaxWaitSeconds: TimeInterval = 60
+    private let mcwrapReattachPollSeconds: TimeInterval = 3
 
     // Raw PTY output callbacks for SwiftTerm integration
     private var ptyOutputCallbacks: [UUID: (String) -> Void] = [:]
@@ -313,6 +318,9 @@ class ServerManager: ObservableObject {
         // Cancel any running tasks
         logStreamTasks[server.id]?.cancel()
         logStreamTasks.removeValue(forKey: server.id)
+        mcwrapReattachTasks[server.id]?.cancel()
+        mcwrapReattachTasks.removeValue(forKey: server.id)
+        lastMcwrapReattachAt.removeValue(forKey: server.id)
         sshServices.removeValue(forKey: server.id)
 
         servers.removeAll { $0.id == server.id }
@@ -442,6 +450,61 @@ class ServerManager: ObservableObject {
         return lower == "not running" || lower.contains("server is not running")
     }
 
+    /// If mcwrap reports "Not running", retry attach once the server is back online.
+    private func scheduleMcwrapReattachIfNeeded(for serverId: UUID, reason: String) {
+        guard let server = servers.first(where: { $0.id == serverId }) else { return }
+        guard server.consoleMode == .ptyMcwrap else { return }
+        guard ptyConsumers[serverId]?.isEmpty == false else { return }
+        guard serverRestarting[serverId] != true else { return }
+        guard mcwrapReattachTasks[serverId] == nil else { return }
+
+        mcwrapReattachTasks[serverId] = Task { [weak self] @MainActor in
+            guard let self else { return }
+            defer { self.mcwrapReattachTasks.removeValue(forKey: serverId) }
+
+            let startedAt = Date()
+            while !Task.isCancelled {
+                if self.serverRestarting[serverId] == true { break }
+                guard self.lastPTYOutputWasNotRunning[serverId] == true else { break }
+                guard self.ptyConsumers[serverId]?.isEmpty == false else { break }
+                guard let current = self.servers.first(where: { $0.id == serverId }) else { break }
+                guard current.consoleMode == .ptyMcwrap else { break }
+
+                if current.systemdUnit != nil {
+                    await self.refreshServerStatus(current)
+                    guard let updated = self.servers.first(where: { $0.id == serverId }) else { break }
+                    if updated.status == .online {
+                        if await self.performMcwrapReattachIfNeeded(for: updated, reason: reason) { break }
+                    }
+                } else {
+                    if await self.performMcwrapReattachIfNeeded(for: current, reason: reason) { break }
+                }
+
+                if Date().timeIntervalSince(startedAt) > self.mcwrapReattachMaxWaitSeconds {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: UInt64(self.mcwrapReattachPollSeconds * 1_000_000_000))
+            }
+        }
+    }
+
+    private func performMcwrapReattachIfNeeded(for server: Server, reason: String) async -> Bool {
+        guard server.consoleMode == .ptyMcwrap else { return false }
+        guard ptyConsumers[server.id]?.isEmpty == false else { return false }
+
+        let now = Date()
+        if let last = lastMcwrapReattachAt[server.id],
+           now.timeIntervalSince(last) < mcwrapReattachCooldownSeconds {
+            return false
+        }
+
+        lastMcwrapReattachAt[server.id] = now
+        lastPTYOutputWasNotRunning[server.id] = false
+        print("[PTY] mcwrap reported not running; reattaching (reason=\(reason))")
+        await connectPTY(for: server)
+        return true
+    }
+
     /// Check if bridge is detected for a server
     func isBridgeDetected(for server: Server) -> Bool {
         return bridgeServices[server.id]?.bridgeDetected ?? false
@@ -483,6 +546,12 @@ class ServerManager: ObservableObject {
                         // Save updated server info
                         await saveServers()
                     }
+                }
+
+                if servers[index].status == .online,
+                   servers[index].consoleMode == .ptyMcwrap,
+                   lastPTYOutputWasNotRunning[server.id] == true {
+                    scheduleMcwrapReattachIfNeeded(for: server.id, reason: "status:online")
                 }
             }
         } catch {
@@ -981,10 +1050,13 @@ class ServerManager: ObservableObject {
     func disconnectPTY(for server: Server) async {
         // Cancel any pending delayed disconnect for this server
         cancelPendingPTYDisconnect(for: server.id)
+        mcwrapReattachTasks[server.id]?.cancel()
+        mcwrapReattachTasks.removeValue(forKey: server.id)
 
         // Cancel stream task
         ptyStreamTasks[server.id]?.cancel()
         ptyStreamTasks.removeValue(forKey: server.id)
+        lastPTYOutputWasNotRunning[server.id] = false
         // If we're in the middle of a restart, the watchdog may be the thing
         // driving reconnection. Don't cancel it here.
         if serverRestarting[server.id] != true {
@@ -1096,6 +1168,7 @@ class ServerManager: ObservableObject {
                         if server.consoleMode == .ptyMcwrap {
                             if self.lineIndicatesServerNotRunning(line) {
                                 self.lastPTYOutputWasNotRunning[serverId] = true
+                                self.scheduleMcwrapReattachIfNeeded(for: serverId, reason: "console:not-running")
                             } else {
                                 self.lastPTYOutputWasNotRunning[serverId] = false
                             }
