@@ -32,6 +32,21 @@ final class ANSIParser {
         case sosPmApcString
     }
     
+    /// Raw RGB color representation for serialization
+    struct RawColor: Equatable {
+        var r: Int
+        var g: Int
+        var b: Int
+        var isDefault: Bool
+
+        static let defaultForeground = RawColor(r: 255, g: 255, b: 255, isDefault: true)
+        static let defaultBackground = RawColor(r: 0, g: 0, b: 0, isDefault: true)
+
+        var asColor: Color {
+            Color(red: Double(r) / 255.0, green: Double(g) / 255.0, blue: Double(b) / 255.0)
+        }
+    }
+
     struct TextStyle {
         var foreground: Color = .white
         var background: Color? = nil
@@ -43,7 +58,11 @@ final class ANSIParser {
         var inverse: Bool = false
         var hidden: Bool = false
         var strikethrough: Bool = false
-        
+
+        // Raw RGB values for serialization
+        var rawForeground: RawColor = .defaultForeground
+        var rawBackground: RawColor = .defaultBackground
+
         mutating func reset() {
             foreground = .white
             background = nil
@@ -55,13 +74,15 @@ final class ANSIParser {
             inverse = false
             hidden = false
             strikethrough = false
+            rawForeground = .defaultForeground
+            rawBackground = .defaultBackground
         }
-        
+
         var effectiveForeground: Color {
             let base = inverse ? (background ?? Color(white: 0.1)) : foreground
             return dim ? base.opacity(0.6) : base
         }
-        
+
         var effectiveBackground: Color? {
             inverse ? foreground : background
         }
@@ -518,72 +539,66 @@ final class ANSIParser {
                 style.strikethrough = false
                 
             // Foreground colors (30-37)
-            case 30: style.foreground = Color(white: 0.2)
-            case 31: style.foreground = Color(red: 0.94, green: 0.33, blue: 0.31)
-            case 32: style.foreground = Color(red: 0.33, green: 0.86, blue: 0.43)
-            case 33: style.foreground = Color(red: 0.98, green: 0.74, blue: 0.25)
-            case 34: style.foreground = Color(red: 0.40, green: 0.57, blue: 0.93)
-            case 35: style.foreground = Color(red: 0.83, green: 0.42, blue: 0.78)
-            case 36: style.foreground = Color(red: 0.30, green: 0.82, blue: 0.87)
-            case 37: style.foreground = Color(white: 0.9)
-            case 39: style.foreground = .white
+            case 30: setForeground(r: 51, g: 51, b: 51)
+            case 31: setForeground(r: 240, g: 84, b: 79)
+            case 32: setForeground(r: 84, g: 219, b: 110)
+            case 33: setForeground(r: 250, g: 189, b: 64)
+            case 34: setForeground(r: 102, g: 145, b: 237)
+            case 35: setForeground(r: 212, g: 107, b: 199)
+            case 36: setForeground(r: 77, g: 209, b: 222)
+            case 37: setForeground(r: 230, g: 230, b: 230)
+            case 39: resetForeground()
                 
             // Background colors (40-47)
-            case 40: style.background = Color(white: 0.1)
-            case 41: style.background = Color(red: 0.6, green: 0.15, blue: 0.15)
-            case 42: style.background = Color(red: 0.15, green: 0.5, blue: 0.2)
-            case 43: style.background = Color(red: 0.6, green: 0.45, blue: 0.1)
-            case 44: style.background = Color(red: 0.15, green: 0.25, blue: 0.55)
-            case 45: style.background = Color(red: 0.5, green: 0.2, blue: 0.45)
-            case 46: style.background = Color(red: 0.1, green: 0.45, blue: 0.5)
-            case 47: style.background = Color(white: 0.7)
-            case 49: style.background = nil
-                
+            case 40: setBackground(r: 26, g: 26, b: 26)
+            case 41: setBackground(r: 153, g: 38, b: 38)
+            case 42: setBackground(r: 38, g: 128, b: 51)
+            case 43: setBackground(r: 153, g: 115, b: 26)
+            case 44: setBackground(r: 38, g: 64, b: 140)
+            case 45: setBackground(r: 128, g: 51, b: 115)
+            case 46: setBackground(r: 26, g: 115, b: 128)
+            case 47: setBackground(r: 179, g: 179, b: 179)
+            case 49: resetBackground()
+
             // Bright foreground (90-97)
-            case 90: style.foreground = Color(white: 0.5)
-            case 91: style.foreground = Color(red: 1, green: 0.45, blue: 0.45)
-            case 92: style.foreground = Color(red: 0.45, green: 1, blue: 0.55)
-            case 93: style.foreground = Color(red: 1, green: 0.9, blue: 0.45)
-            case 94: style.foreground = Color(red: 0.55, green: 0.7, blue: 1)
-            case 95: style.foreground = Color(red: 1, green: 0.55, blue: 0.95)
-            case 96: style.foreground = Color(red: 0.45, green: 0.95, blue: 1)
-            case 97: style.foreground = .white
-                
+            case 90: setForeground(r: 128, g: 128, b: 128)
+            case 91: setForeground(r: 255, g: 115, b: 115)
+            case 92: setForeground(r: 115, g: 255, b: 140)
+            case 93: setForeground(r: 255, g: 230, b: 115)
+            case 94: setForeground(r: 140, g: 179, b: 255)
+            case 95: setForeground(r: 255, g: 140, b: 242)
+            case 96: setForeground(r: 115, g: 242, b: 255)
+            case 97: setForeground(r: 255, g: 255, b: 255)
+
             // Bright background (100-107)
-            case 100: style.background = Color(white: 0.4)
-            case 101: style.background = Color(red: 0.8, green: 0.3, blue: 0.3)
-            case 102: style.background = Color(red: 0.3, green: 0.7, blue: 0.35)
-            case 103: style.background = Color(red: 0.8, green: 0.65, blue: 0.2)
-            case 104: style.background = Color(red: 0.35, green: 0.45, blue: 0.75)
-            case 105: style.background = Color(red: 0.7, green: 0.4, blue: 0.65)
-            case 106: style.background = Color(red: 0.25, green: 0.65, blue: 0.7)
-            case 107: style.background = Color(white: 0.85)
-                
+            case 100: setBackground(r: 102, g: 102, b: 102)
+            case 101: setBackground(r: 204, g: 77, b: 77)
+            case 102: setBackground(r: 77, g: 179, b: 89)
+            case 103: setBackground(r: 204, g: 166, b: 51)
+            case 104: setBackground(r: 89, g: 115, b: 191)
+            case 105: setBackground(r: 179, g: 102, b: 166)
+            case 106: setBackground(r: 64, g: 166, b: 179)
+            case 107: setBackground(r: 217, g: 217, b: 217)
+
             // 256 color mode (38;5;n or 48;5;n)
             case 38:
                 if i + 2 < params.count && params[i + 1] == 5 {
-                    style.foreground = color256(params[i + 2])
+                    let rgb = color256RGB(params[i + 2])
+                    setForeground(r: rgb.r, g: rgb.g, b: rgb.b)
                     i += 2
                 } else if i + 4 < params.count && params[i + 1] == 2 {
                     // True color: 38;2;r;g;b
-                    style.foreground = Color(
-                        red: Double(params[i + 2]) / 255.0,
-                        green: Double(params[i + 3]) / 255.0,
-                        blue: Double(params[i + 4]) / 255.0
-                    )
+                    setForeground(r: params[i + 2], g: params[i + 3], b: params[i + 4])
                     i += 4
                 }
             case 48:
                 if i + 2 < params.count && params[i + 1] == 5 {
-                    style.background = color256(params[i + 2])
+                    let rgb = color256RGB(params[i + 2])
+                    setBackground(r: rgb.r, g: rgb.g, b: rgb.b)
                     i += 2
                 } else if i + 4 < params.count && params[i + 1] == 2 {
                     // True color: 48;2;r;g;b
-                    style.background = Color(
-                        red: Double(params[i + 2]) / 255.0,
-                        green: Double(params[i + 3]) / 255.0,
-                        blue: Double(params[i + 4]) / 255.0
-                    )
+                    setBackground(r: params[i + 2], g: params[i + 3], b: params[i + 4])
                     i += 4
                 }
                 
@@ -625,28 +640,51 @@ final class ANSIParser {
         currentText = ""
     }
     
-    private func color256(_ index: Int) -> Color {
-        guard index >= 0 && index < 256 else { return .white }
-        
+    // MARK: - Color Helpers
+
+    private func setForeground(r: Int, g: Int, b: Int) {
+        style.foreground = Color(red: Double(r) / 255.0, green: Double(g) / 255.0, blue: Double(b) / 255.0)
+        style.rawForeground = RawColor(r: r, g: g, b: b, isDefault: false)
+    }
+
+    private func resetForeground() {
+        style.foreground = .white
+        style.rawForeground = .defaultForeground
+    }
+
+    private func setBackground(r: Int, g: Int, b: Int) {
+        style.background = Color(red: Double(r) / 255.0, green: Double(g) / 255.0, blue: Double(b) / 255.0)
+        style.rawBackground = RawColor(r: r, g: g, b: b, isDefault: false)
+    }
+
+    private func resetBackground() {
+        style.background = nil
+        style.rawBackground = .defaultBackground
+    }
+
+    /// Get 256-color as RGB tuple
+    private func color256RGB(_ index: Int) -> (r: Int, g: Int, b: Int) {
+        guard index >= 0 && index < 256 else { return (255, 255, 255) }
+
         if index < 16 {
-            // Standard colors
-            let colors: [Color] = [
-                Color(white: 0.1),                              // 0: Black
-                Color(red: 0.8, green: 0.2, blue: 0.2),         // 1: Red
-                Color(red: 0.2, green: 0.8, blue: 0.3),         // 2: Green
-                Color(red: 0.8, green: 0.7, blue: 0.2),         // 3: Yellow
-                Color(red: 0.3, green: 0.4, blue: 0.9),         // 4: Blue
-                Color(red: 0.8, green: 0.3, blue: 0.7),         // 5: Magenta
-                Color(red: 0.2, green: 0.7, blue: 0.8),         // 6: Cyan
-                Color(white: 0.85),                             // 7: White
-                Color(white: 0.4),                              // 8: Bright Black
-                Color(red: 1, green: 0.4, blue: 0.4),           // 9: Bright Red
-                Color(red: 0.4, green: 1, blue: 0.5),           // 10: Bright Green
-                Color(red: 1, green: 0.95, blue: 0.4),          // 11: Bright Yellow
-                Color(red: 0.5, green: 0.6, blue: 1),           // 12: Bright Blue
-                Color(red: 1, green: 0.5, blue: 0.9),           // 13: Bright Magenta
-                Color(red: 0.4, green: 0.95, blue: 1),          // 14: Bright Cyan
-                .white                                          // 15: Bright White
+            // Standard 16 colors
+            let colors: [(r: Int, g: Int, b: Int)] = [
+                (26, 26, 26),     // 0: Black
+                (204, 51, 51),    // 1: Red
+                (51, 204, 77),    // 2: Green
+                (204, 179, 51),   // 3: Yellow
+                (77, 102, 230),   // 4: Blue
+                (204, 77, 179),   // 5: Magenta
+                (51, 179, 204),   // 6: Cyan
+                (217, 217, 217),  // 7: White
+                (102, 102, 102),  // 8: Bright Black
+                (255, 102, 102),  // 9: Bright Red
+                (102, 255, 128),  // 10: Bright Green
+                (255, 242, 102),  // 11: Bright Yellow
+                (128, 153, 255),  // 12: Bright Blue
+                (255, 128, 230),  // 13: Bright Magenta
+                (102, 242, 255),  // 14: Bright Cyan
+                (255, 255, 255),  // 15: Bright White
             ]
             return colors[index]
         } else if index < 232 {
@@ -655,15 +693,75 @@ final class ANSIParser {
             let b = n % 6
             let g = (n / 6) % 6
             let r = n / 36
-            return Color(
-                red: r == 0 ? 0 : Double(r * 40 + 55) / 255.0,
-                green: g == 0 ? 0 : Double(g * 40 + 55) / 255.0,
-                blue: b == 0 ? 0 : Double(b * 40 + 55) / 255.0
+            return (
+                r: r == 0 ? 0 : r * 40 + 55,
+                g: g == 0 ? 0 : g * 40 + 55,
+                b: b == 0 ? 0 : b * 40 + 55
             )
         } else {
             // Grayscale (24 shades)
-            let gray = Double((index - 232) * 10 + 8) / 255.0
-            return Color(white: gray)
+            let gray = (index - 232) * 10 + 8
+            return (r: gray, g: gray, b: gray)
         }
+    }
+
+    private func color256(_ index: Int) -> Color {
+        let rgb = color256RGB(index)
+        return Color(red: Double(rgb.r) / 255.0, green: Double(rgb.g) / 255.0, blue: Double(rgb.b) / 255.0)
+    }
+
+    // MARK: - State Export
+
+    /// Export current style state as an ANSI escape sequence
+    /// This allows warming up the parser on hidden lines and then
+    /// applying the resulting state to the first visible line
+    func currentStateAsANSI() -> String {
+        var parts: [String] = []
+
+        // Reset first, then set active attributes
+        parts.append("0")
+
+        // Bold/dim
+        if style.bold { parts.append("1") }
+        if style.dim { parts.append("2") }
+        if style.italic { parts.append("3") }
+        if style.underline { parts.append("4") }
+        if style.blink { parts.append("5") }
+        if style.inverse { parts.append("7") }
+        if style.hidden { parts.append("8") }
+        if style.strikethrough { parts.append("9") }
+
+        // Foreground color (truecolor)
+        if !style.rawForeground.isDefault {
+            let fg = style.rawForeground
+            parts.append("38;2;\(fg.r);\(fg.g);\(fg.b)")
+        }
+
+        // Background color (truecolor)
+        if !style.rawBackground.isDefault {
+            let bg = style.rawBackground
+            parts.append("48;2;\(bg.r);\(bg.g);\(bg.b)")
+        }
+
+        // If only reset, return just the reset sequence
+        if parts == ["0"] {
+            return "\u{1B}[0m"
+        }
+
+        return "\u{1B}[\(parts.joined(separator: ";"))m"
+    }
+
+    /// Check if the style differs from default (white foreground, no background, no attributes)
+    var hasNonDefaultState: Bool {
+        return !style.rawForeground.isDefault
+            || !style.rawBackground.isDefault
+            || style.bold
+            || style.dim
+            || style.italic
+            || style.underline
+            || style.blink
+            || style.inverse
+            || style.hidden
+            || style.strikethrough
     }
 }

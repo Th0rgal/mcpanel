@@ -344,10 +344,12 @@ struct SelectableConsoleTextView: NSViewRepresentable {
 
     let messages: [ConsoleMessage]
     let backgroundColor: NSColor
+    let renderToken: UUID?
 
-    init(messages: [ConsoleMessage], backgroundColor: NSColor = .clear) {
+    init(messages: [ConsoleMessage], backgroundColor: NSColor = .clear, renderToken: UUID? = nil) {
         self.messages = messages
         self.backgroundColor = backgroundColor
+        self.renderToken = renderToken
     }
 
     func makeCoordinator() -> Coordinator {
@@ -397,7 +399,7 @@ struct SelectableConsoleTextView: NSViewRepresentable {
         context.coordinator.textView = nsView.documentView as? NSTextView
 
         // Incremental append if possible
-        context.coordinator.update(messages: messages)
+        context.coordinator.update(messages: messages, renderToken: renderToken)
     }
 
     final class Coordinator {
@@ -405,13 +407,20 @@ struct SelectableConsoleTextView: NSViewRepresentable {
         weak var scrollView: NSScrollView?
         private var renderedCount: Int = 0
         private var lastRenderedId: UUID?
+        private var didInitialRender: Bool = false
+        private var lastRenderToken: UUID?
         private let baseFont: NSFont = NSFont(name: "Menlo", size: 12) ?? NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
 
         // Persistent ANSI parser to maintain color state across messages
         // This is critical for truecolor gradients that span multiple lines
         private var ansiParser = ANSIParser()
 
-        func update(messages: [ConsoleMessage]) {
+        func update(messages: [ConsoleMessage], renderToken: UUID?) {
+            if let token = renderToken, token != lastRenderToken {
+                lastRenderToken = token
+                renderAll(messages: messages)
+                return
+            }
             if messages.isEmpty {
                 renderAll(messages: messages)
                 return
@@ -439,16 +448,22 @@ struct SelectableConsoleTextView: NSViewRepresentable {
 
         func renderAll(messages: [ConsoleMessage]) {
             guard let textView else { return }
+
             let shouldAutoScroll = shouldAutoScroll()
             let preservedOffset = shouldAutoScroll ? nil : currentScrollOffset()
             textView.textStorage?.setAttributedString(NSAttributedString())
             renderedCount = 0
             // Reset parser state when re-rendering from scratch
             ansiParser = ANSIParser()
+
             append(messages: messages, autoScroll: false)
             renderedCount = messages.count
             lastRenderedId = messages.last?.id
-            if shouldAutoScroll {
+            if !didInitialRender {
+                // Always land at bottom on first render (e.g., when returning to the Console tab).
+                scrollToBottom()
+                didInitialRender = true
+            } else if shouldAutoScroll {
                 scrollToBottom()
             } else if let preservedOffset {
                 restoreScrollOffset(preservedOffset)
@@ -463,6 +478,7 @@ struct SelectableConsoleTextView: NSViewRepresentable {
             for message in messages {
                 let line = render(message: message)
                 let shouldDisplay = message.rawANSI ? hasVisibleContent(message.content) : true
+
                 if shouldDisplay {
                     storage.append(line)
                     storage.append(NSAttributedString(string: "\n"))
@@ -484,10 +500,16 @@ struct SelectableConsoleTextView: NSViewRepresentable {
                     // Use the persistent parser to maintain color state across lines
                     // This is essential for truecolor gradients (like Oraxen's colored output)
                     attr = ansiParser.process(message.content)
-                } else {
-                    // Some PTY backends may emit Minecraft/Adventure formatting without ANSI escapes.
-                    // Parse Minecraft color codes + MiniMessage/gradients so raw codes don't leak.
+                } else if message.content.contains("§")
+                            || message.content.contains("<gradient")
+                            || message.content.contains("<rainbow")
+                            || message.content.contains("<#")
+                            || message.content.contains("<color:") {
+                    // Parse Minecraft/MiniMessage formatting when no ANSI escapes exist.
                     attr = MinecraftColorParser.parse(message.content, defaultColor: message.level.textColor)
+                } else {
+                    // No ANSI escapes; keep ANSI parser state so colors can carry across lines.
+                    attr = ansiParser.process(message.content)
                 }
             } else {
                 // Include timestamp/level for non-PTY sources.
@@ -769,7 +791,10 @@ struct SwiftTermConsoleView: View {
             // Output area
             if useEnhancedInputBar {
                 // In mcwrap mode, use a native selectable text view (more reliable than terminal selection).
-                SelectableConsoleTextView(messages: serverManager.selectedServerConsole)
+                SelectableConsoleTextView(
+                    messages: serverManager.selectedServerConsole,
+                    renderToken: serverManager.selectedServerConsoleRenderToken
+                )
             } else {
                 // Terminal output area
                 GeometryReader { geometry in

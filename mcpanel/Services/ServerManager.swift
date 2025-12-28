@@ -88,6 +88,7 @@ class ServerManager: ObservableObject {
     // Per-server state
     @Published var plugins: [UUID: [Plugin]] = [:]
     @Published var consoleMessages: [UUID: [ConsoleMessage]] = [:]
+    @Published var consoleRenderToken: [UUID: UUID] = [:]
     @Published var files: [UUID: [FileItem]] = [:]
     @Published var currentPaths: [UUID: String] = [:]
 
@@ -152,6 +153,11 @@ class ServerManager: ObservableObject {
     var selectedServerConsole: [ConsoleMessage] {
         guard let server = selectedServer else { return [] }
         return consoleMessages[server.id] ?? []
+    }
+
+    var selectedServerConsoleRenderToken: UUID? {
+        guard let server = selectedServer else { return nil }
+        return consoleRenderToken[server.id]
     }
 
     var selectedServerFiles: [FileItem] {
@@ -956,9 +962,9 @@ class ServerManager: ObservableObject {
             }
 
             // For mcwrap mode, hydrate the console from scrollback first so we don't miss startup logs
-            // during reconnects/restarts.
+            // during reconnects/restarts. The warmup approach builds ANSI state from earlier lines.
             if server.consoleMode == .ptyMcwrap {
-                await hydrateConsoleFromMcwrapScrollback(for: server)
+                await hydrateConsoleFromMcwrapScrollback(for: server, forceReplace: true)
             }
 
             // Start streaming PTY output
@@ -988,16 +994,20 @@ class ServerManager: ObservableObject {
 
     /// Hydrate/patch the visible console using `mcwrap-pty log` so we don't miss logs during reconnects.
     /// This merges scrollback with the existing in-memory console when possible, otherwise replaces it.
-    private func hydrateConsoleFromMcwrapScrollback(for server: Server) async {
+    ///
+    /// **ANSI State Warmup**: When loading scrollback, earlier lines may have set ANSI color state
+    /// that carries into later lines. We parse extra "warmup" lines to build this state,
+    /// then serialize it as an ANSI prefix for the first displayed line.
+    private func hydrateConsoleFromMcwrapScrollback(for server: Server, forceReplace: Bool = false) async {
         guard server.consoleMode == .ptyMcwrap else { return }
         guard let scrollback = await fetchScrollbackHistory(for: server) else { return }
 
         let filteredScrollback = MCPanelBridgeProtocol.filterConsoleOutput(scrollback)
-        let lines = filteredScrollback
+        let allLines = filteredScrollback
             .components(separatedBy: .newlines)
             .filter { !$0.isEmpty }
             .filter { !shouldFilterLine($0) }
-        guard !lines.isEmpty else { return }
+        guard !allLines.isEmpty else { return }
 
         let serverId = server.id
 
@@ -1010,7 +1020,7 @@ class ServerManager: ObservableObject {
             )
         }
 
-        let fetchedStripped = lines.map(stripANSI)
+        let fetchedStripped = allLines.map(stripANSI)
         let existing = consoleMessages[serverId] ?? []
         let existingTail = Array(existing.suffix(50))
 
@@ -1026,12 +1036,21 @@ class ServerManager: ObservableObject {
         }
 
         let newMessages: [ConsoleMessage]
-        if let idx = matchIndexInFetched, idx + 1 < lines.count {
+        if !forceReplace, let idx = matchIndexInFetched, idx + 1 < allLines.count {
             // Append only the new portion.
-            let appendLines = lines[(idx + 1)...]
+            // For incremental append, use warmup from the start of ALL lines up to idx
+            let warmupParser = ANSIParser()
+            for i in 0...idx {
+                _ = warmupParser.process(allLines[i])
+            }
+            let statePrefix = warmupParser.hasNonDefaultState ? warmupParser.currentStateAsANSI() : ""
+
+            let appendLines = Array(allLines[(idx + 1)...])
             var merged = existing
-            for line in appendLines {
-                merged.append(ConsoleMessage(level: .info, content: line, rawANSI: true))
+            for (i, line) in appendLines.enumerated() {
+                // Prepend ANSI state to the first line only
+                let content = (i == 0 && !statePrefix.isEmpty) ? statePrefix + line : line
+                merged.append(ConsoleMessage(level: .info, content: content, rawANSI: true, isScrollback: true))
             }
             if merged.count > 1000 {
                 merged.removeFirst(merged.count - 1000)
@@ -1039,11 +1058,33 @@ class ServerManager: ObservableObject {
             newMessages = merged
         } else {
             // Replace with last portion of scrollback (more reliable than guessing)
-            let trimmed = lines.suffix(800)
-            newMessages = trimmed.map { ConsoleMessage(level: .info, content: $0, rawANSI: true) }
+            // Use earlier lines as warmup to build ANSI state
+            let displayCount = 800
+            let warmupCount = max(0, allLines.count - displayCount)
+
+            // Parse warmup lines to build ANSI state
+            let warmupParser = ANSIParser()
+            for i in 0..<warmupCount {
+                _ = warmupParser.process(allLines[i])
+            }
+
+            // Get the accumulated state as an ANSI sequence
+            let statePrefix = warmupParser.hasNonDefaultState ? warmupParser.currentStateAsANSI() : ""
+
+            // Create messages for display lines
+            let displayLines = Array(allLines.suffix(displayCount))
+            var messages: [ConsoleMessage] = []
+            for (i, line) in displayLines.enumerated() {
+                // Prepend ANSI state to the first line only
+                let content = (i == 0 && !statePrefix.isEmpty) ? statePrefix + line : line
+                messages.append(ConsoleMessage(level: .info, content: content, rawANSI: true, isScrollback: true))
+            }
+            newMessages = messages
         }
 
         consoleMessages[serverId] = newMessages
+        // Force a full re-render so ANSI state is rebuilt from scrollback.
+        consoleRenderToken[serverId] = UUID()
     }
 
     /// Disconnect from PTY console
@@ -1390,6 +1431,10 @@ class ServerManager: ObservableObject {
 
         // Filter completely empty lines
         if stripped.isEmpty {
+            // Preserve ANSI-only lines (e.g., reset sequences) to keep parser state correct.
+            if line.contains("\u{1B}") {
+                return false
+            }
             return true
         }
 
