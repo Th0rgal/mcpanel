@@ -14,7 +14,7 @@ class DebugLogger {
     static let shared = DebugLogger()
 
     private let logFileURL: URL
-    private let queue = DispatchQueue(label: "com.mcpanel.debug-logger", qos: .utility)
+    private let queue = DispatchQueue(label: "md.thomas.mcpanel.debug-logger", qos: .utility)
     private var isVerbose: Bool
     private let dateFormatter: DateFormatter
 
