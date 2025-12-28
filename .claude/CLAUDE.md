@@ -226,6 +226,78 @@ struct Server: Identifiable, Codable {
 }
 ```
 
+## MCPanel Bridge Communication Protocol
+
+**IMPORTANT: Use OSC messages through PTY for all server communication. Do NOT use RCON.**
+
+### Why OSC over RCON?
+- RCON is unreliable and spams the console
+- OSC messages are embedded in the PTY stream, no extra ports needed
+- Works through existing SSH connection
+- Supports bi-directional communication (server → app via OSC, app → server via stdin)
+
+### OSC Message Format
+Messages are encoded as OSC (Operating System Command) escape sequences that terminals ignore but MCPanel captures:
+
+```
+\u{1B}]mcpanel;<base64-json>\u{07}
+```
+
+- `\u{1B}]` = OSC start (ESC ])
+- `mcpanel;` = MCPanel identifier
+- `<base64-json>` = Base64-encoded JSON payload
+- `\u{07}` = Bell character (OSC terminator)
+
+### Message Types
+
+**Events (Server → App):**
+- `mcpanel_bridge_ready` - Plugin loaded, includes version/platform/features
+- `player_join` / `player_leave` - Player events with name/UUID
+- `server_ready` - Server finished loading
+- `players_update` - Periodic player list broadcast
+- `status_update` - TPS, memory, world info
+- `registry_update` - Static registries (item IDs, etc.)
+
+**Requests (App → Server via stdin):**
+Commands sent to server stdin, responses come back via OSC:
+```
+mcpanel <base64-request>
+```
+
+### Static Data Files
+The plugin exports static registries to JSON files on startup/reload:
+- `plugins/MCPanelBridge/commands.json` - Brigadier command tree
+- `plugins/MCPanelBridge/registries/` - Plugin-specific registries (oraxen_items.json, etc.)
+
+### Implementation Pattern (Swift)
+```swift
+// In MCPanelBridgeService.swift
+func processOutput(_ data: String) -> String {
+    guard MCPanelBridgeProtocol.containsMessage(data) else {
+        return data
+    }
+    let messages = MCPanelBridgeProtocol.extractMessages(data)
+    for message in messages {
+        switch message {
+        case .event(let event): handleEvent(event)
+        case .response(let response): handleResponse(response)
+        }
+    }
+    return MCPanelBridgeProtocol.filterConsoleOutput(data)
+}
+```
+
+### Implementation Pattern (Java Plugin)
+```java
+// Broadcast OSC message to console
+public void broadcastEvent(String eventType, Object payload) {
+    String json = gson.toJson(new MCPanelEvent(eventType, payload));
+    String base64 = Base64.getEncoder().encodeToString(json.getBytes());
+    String osc = "\u001B]mcpanel;" + base64 + "\u0007";
+    Bukkit.getConsoleSender().sendMessage(osc);
+}
+```
+
 ## Conventions
 
 - Use SF Symbols for icons (16pt)
@@ -237,3 +309,4 @@ struct Server: Identifiable, Codable {
 - Always capture objects weakly in notification observers
 - Use async/await for SSH operations
 - Store sensitive data in Keychain, not UserDefaults
+- **Never use RCON** - prefer OSC messages through PTY

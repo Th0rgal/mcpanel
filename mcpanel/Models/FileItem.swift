@@ -137,8 +137,8 @@ struct FileItem: Identifiable, Hashable {
 
         // Parse date (components 5, 6, 7 or 5, 6)
         // Format varies: "Dec 26 09:57" or "Dec 26 2024"
-        var nameStartIndex = 8
-        var dateStr = "\(components[5]) \(components[6]) \(components[7])"
+        let nameStartIndex = 8
+        let dateStr = "\(components[5]) \(components[6]) \(components[7])"
 
         // The name is everything after the date
         let name = components[nameStartIndex...].joined(separator: " ")

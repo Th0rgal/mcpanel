@@ -28,13 +28,17 @@ struct ServerDetailView: View {
     @ViewBuilder
     private func tabContent(_ server: Server) -> some View {
         switch serverManager.selectedTab {
+        case .monitor:
+            DashboardView(server: server)
+                .environmentObject(serverManager)
+                .padding(.top, 12)
         case .console:
             // Console view extends to top with fade effect
             ZStack(alignment: .topTrailing) {
                 SwiftTermConsoleView()
                     .environmentObject(serverManager)
 
-                // Top fade gradient overlay
+                // Top fade gradient overlay (visual only, doesn't block interaction)
                 VStack {
                     LinearGradient(
                         colors: [
@@ -46,15 +50,15 @@ struct ServerDetailView: View {
                         endPoint: .bottom
                     )
                     .frame(height: 40)
-                    .allowsHitTesting(false)
-
                     Spacer()
                 }
+                .allowsHitTesting(false)
 
-                // Floating server controls
+                // Floating server controls (draggable for window movement)
                 floatingServerControls(server)
                     .padding(.top, 12)
                     .padding(.trailing, 12)
+                    .background(WindowDragArea())
             }
         case .plugins:
             PluginsView()

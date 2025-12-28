@@ -15,8 +15,9 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Titlebar space
-            Spacer().frame(height: titlebarSpacerHeight)
+            // Titlebar space (draggable area)
+            WindowDragArea()
+                .frame(height: titlebarSpacerHeight)
 
             // App header
             appHeader
@@ -53,6 +54,7 @@ struct SidebarView: View {
         }
         .padding(.horizontal, contentInsetX + 4)
         .padding(.bottom, 16)
+        .background(WindowDragArea())
     }
 
     // MARK: - Servers Section
@@ -291,10 +293,10 @@ struct SidebarSectionHeader: View {
 
     var body: some View {
         Text(title)
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundColor(.white.opacity(0.5))
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundColor(.white.opacity(0.4))
             .textCase(.uppercase)
-            .tracking(0.5)
+            .tracking(1.2)
             .padding(.horizontal, 10)
             .padding(.top, 14)
             .padding(.bottom, 6)

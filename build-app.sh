@@ -1,18 +1,31 @@
 #!/bin/bash
 
 # Build script for MCPanel.app
+# Usage: ./build-app.sh [--release]
+#   Default: debug mode (faster builds)
+#   --release: optimized release build
 
 set -e
+set -o pipefail
 
 APP_NAME="MCPanel"
-BUILD_DIR=".build/release"
 APP_BUNDLE="$APP_NAME.app"
 CONTENTS_DIR="$APP_BUNDLE/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 
-echo "🖥️  Building $APP_NAME in release mode..."
-swift build -c release
+# Parse arguments
+BUILD_CONFIG="debug"
+BUILD_DIR=".build/debug"
+if [[ "$1" == "--release" ]]; then
+    BUILD_CONFIG="release"
+    BUILD_DIR=".build/release"
+    echo "🖥️  Building $APP_NAME in release mode (optimized)..."
+    swift build -c release 2>&1 | { grep -v "found 1 file(s) which are unhandled" || true; }
+else
+    echo "🖥️  Building $APP_NAME in debug mode (fast)..."
+    swift build 2>&1 | { grep -v "found 1 file(s) which are unhandled" || true; }
+fi
 
 echo "📦 Creating app bundle..."
 

@@ -1,0 +1,21 @@
+name: MCPanelBridge
+version: ${version}
+main: dev.th0rgal.mcpanel.bridge.bukkit.MCPanelBridgePlugin
+api-version: "1.20"
+description: Bridge plugin for MCPanel - Real-time console communication
+author: Th0rgal
+website: https://github.com/Th0rgal/mcpanel
+
+# Load early to capture all commands
+load: STARTUP
+
+# Folia support
+folia-supported: true
+
+# MCPanel bridge command - silent handler for protocol requests
+# Hidden from help, only accessible via RCON
+commands:
+  mcpanel:
+    description: MCPanel bridge protocol handler (internal)
+    usage: /<command>
+    permission: mcpanel.bridge

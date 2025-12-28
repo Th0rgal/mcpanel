@@ -1,0 +1,139 @@
+{
+  "commands": {
+    "help": {
+      "description": "Shows help for commands"
+    },
+    "stop": {
+      "description": "Stops the server"
+    },
+    "restart": {
+      "description": "Restarts the server"
+    },
+    "reload": {
+      "description": "Reloads the server"
+    },
+    "plugins": {
+      "description": "Lists plugins"
+    },
+    "oraxen": {
+      "description": "Oraxen main command",
+      "children": {
+        "reload": {
+          "description": "Reload Oraxen configuration"
+        },
+        "give": {
+          "description": "Give an Oraxen item",
+          "children": {
+            "<player>": {
+              "type": "player",
+              "examples": ["Notch", "jeb_"],
+              "children": {
+                "<item>": {
+                  "type": "oraxen_item"
+                }
+              }
+            }
+          }
+        },
+        "pack": {
+          "description": "Resource pack commands",
+          "children": {
+            "send": {
+              "description": "Send resource pack"
+            },
+            "generate": {
+              "description": "Regenerate resource pack"
+            }
+          }
+        },
+        "debug": {
+          "description": "Debug commands"
+        }
+      }
+    },
+    "gamemode": {
+      "description": "Sets a player's game mode",
+      "children": {
+        "survival": {
+          "children": {
+            "<player>": {
+              "type": "player"
+            }
+          }
+        },
+        "creative": {
+          "children": {
+            "<player>": {
+              "type": "player"
+            }
+          }
+        },
+        "adventure": {
+          "children": {
+            "<player>": {
+              "type": "player"
+            }
+          }
+        },
+        "spectator": {
+          "children": {
+            "<player>": {
+              "type": "player"
+            }
+          }
+        }
+      }
+    },
+    "give": {
+      "description": "Gives an item to a player",
+      "children": {
+        "<player>": {
+          "type": "player",
+          "children": {
+            "<item>": {
+              "type": "item"
+            }
+          }
+        }
+      }
+    },
+    "tp": {
+      "description": "Teleports entities"
+    },
+    "teleport": {
+      "description": "Teleports entities"
+    },
+    "kick": {
+      "description": "Kicks a player"
+    },
+    "ban": {
+      "description": "Bans a player"
+    },
+    "pardon": {
+      "description": "Pardons a player"
+    },
+    "whitelist": {
+      "description": "Manages server whitelist",
+      "children": {
+        "add": {
+          "children": {
+            "<player>": {
+              "type": "player"
+            }
+          }
+        },
+        "remove": {
+          "children": {
+            "<player>": {
+              "type": "player"
+            }
+          }
+        },
+        "list": {},
+        "on": {},
+        "off": {},
+        "reload": {}
+      }
+    }
+  }
+}

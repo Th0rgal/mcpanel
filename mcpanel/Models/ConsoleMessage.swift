@@ -79,6 +79,7 @@ struct ConsoleMessage: Identifiable, Hashable {
     let content: String
     let source: String?  // Plugin name or system component
     let rawANSI: Bool    // If true, content contains raw ANSI sequences (from PTY)
+    let isScrollback: Bool  // True when sourced from scrollback/history
 
     // MARK: - Computed Properties
 
@@ -102,7 +103,8 @@ struct ConsoleMessage: Identifiable, Hashable {
         level: ConsoleLevel = .info,
         content: String,
         source: String? = nil,
-        rawANSI: Bool = false
+        rawANSI: Bool = false,
+        isScrollback: Bool = false
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -110,6 +112,7 @@ struct ConsoleMessage: Identifiable, Hashable {
         self.content = content
         self.source = source
         self.rawANSI = rawANSI
+        self.isScrollback = isScrollback
     }
 
     /// Parse a Minecraft server log line

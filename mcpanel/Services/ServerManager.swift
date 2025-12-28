@@ -9,6 +9,32 @@ import Foundation
 import SwiftUI
 import Combine
 
+// MARK: - Brigadier Command Tree
+
+/// Hierarchical command structure parsed from Brigadier JSON
+struct BrigadierCommandTree {
+    /// Root commands available on this server
+    var rootCommands: Set<String> = []
+
+    /// Subcommands for each root command (e.g., "oraxen" -> ["reload", "give", "pack", ...])
+    var subcommands: [String: Set<String>] = [:]
+
+    /// Get all known commands (flat list)
+    var allCommands: [String] {
+        return rootCommands.sorted()
+    }
+
+    /// Check if a command has subcommands
+    func hasSubcommands(_ command: String) -> Bool {
+        return !(subcommands[command.lowercased()]?.isEmpty ?? true)
+    }
+
+    /// Get subcommands for a root command
+    func getSubcommands(for command: String) -> [String] {
+        return subcommands[command.lowercased()]?.sorted() ?? []
+    }
+}
+
 // MARK: - Sidebar Selection
 
 enum SidebarSelection: Hashable {
@@ -19,6 +45,7 @@ enum SidebarSelection: Hashable {
 // MARK: - Detail View Selection
 
 enum DetailTab: String, CaseIterable, Identifiable {
+    case monitor = "Monitor"
     case console = "Console"
     case plugins = "Plugins"
     case files = "Files"
@@ -29,6 +56,7 @@ enum DetailTab: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
+        case .monitor: return "gauge.with.dots.needle.bottom.50percent"
         case .console: return "terminal.fill"
         case .plugins: return "puzzlepiece.extension.fill"
         case .files: return "folder.fill"
@@ -36,6 +64,13 @@ enum DetailTab: String, CaseIterable, Identifiable {
         case .settings: return "gearshape.fill"
         }
     }
+}
+
+// MARK: - PTY Consumers
+
+enum PTYConsumer: String, Hashable {
+    case console
+    case monitor
 }
 
 // MARK: - Server Manager
@@ -46,13 +81,14 @@ class ServerManager: ObservableObject {
 
     @Published var servers: [Server] = []
     @Published var selectedSidebar: SidebarSelection?
-    @Published var selectedTab: DetailTab = .console
+    @Published var selectedTab: DetailTab = .monitor
     @Published var isLoading: Bool = false
     @Published var errorMessage: String?
 
     // Per-server state
     @Published var plugins: [UUID: [Plugin]] = [:]
     @Published var consoleMessages: [UUID: [ConsoleMessage]] = [:]
+    @Published var consoleRenderToken: [UUID: UUID] = [:]
     @Published var files: [UUID: [FileItem]] = [:]
     @Published var currentPaths: [UUID: String] = [:]
 
@@ -66,6 +102,9 @@ class ServerManager: ObservableObject {
     private var ptyServices: [UUID: PTYService] = [:]
     private var logStreamTasks: [UUID: Task<Void, Never>] = [:]
     private var ptyStreamTasks: [UUID: Task<Void, Never>] = [:]
+    private var ptyDisconnectTasks: [UUID: Task<Void, Never>] = [:]
+    private var restartWatchdogTasks: [UUID: Task<Void, Never>] = [:]
+    private var mcwrapReattachTasks: [UUID: Task<Void, Never>] = [:]
     private let persistence = PersistenceService()
     private var statusRefreshTask: Task<Void, Never>?
 
@@ -73,9 +112,31 @@ class ServerManager: ObservableObject {
     @Published var ptyConnected: [UUID: Bool] = [:]
     @Published var detectedSessions: [UUID: [DetectedSession]] = [:]
     private var desiredPTYSize: [UUID: (cols: Int, rows: Int)] = [:]
+    private var serverRestarting: [UUID: Bool] = [:]  // Track if server is in restart process
+    private var lastPTYOutputAt: [UUID: Date] = [:]
+    private var restartRequestedAt: [UUID: Date] = [:]
+    private var lastPTYOutputWasNotRunning: [UUID: Bool] = [:]
+    private var lastMcwrapReattachAt: [UUID: Date] = [:]
+    private var ptyConsumers: [UUID: Set<PTYConsumer>] = [:]
+    private let ptyDisconnectGraceSeconds: TimeInterval = 10
+    private let mcwrapReattachCooldownSeconds: TimeInterval = 8
+    private let mcwrapReattachMaxWaitSeconds: TimeInterval = 60
+    private let mcwrapReattachPollSeconds: TimeInterval = 3
 
     // Raw PTY output callbacks for SwiftTerm integration
     private var ptyOutputCallbacks: [UUID: (String) -> Void] = [:]
+
+    // Brigadier command tree (discovered from server's commands.json)
+    @Published var commandTree: [UUID: BrigadierCommandTree] = [:]
+    private var commandDiscoveryTask: [UUID: Task<Void, Never>] = [:]
+
+    // MCPanel Bridge services (one per server)
+    @Published var bridgeServices: [UUID: MCPanelBridgeService] = [:]
+    private var bridgeCommandTreeSubscriptions: [UUID: AnyCancellable] = [:]
+    private var bridgeCommandTreeRefreshTasks: [UUID: Task<Void, Never>] = [:]
+
+    /// Counter that increments when command trees are updated - views can observe this
+    @Published var commandTreeUpdateCount = 0
 
     // MARK: - Computed Properties
 
@@ -92,6 +153,11 @@ class ServerManager: ObservableObject {
     var selectedServerConsole: [ConsoleMessage] {
         guard let server = selectedServer else { return [] }
         return consoleMessages[server.id] ?? []
+    }
+
+    var selectedServerConsoleRenderToken: UUID? {
+        guard let server = selectedServer else { return nil }
+        return consoleRenderToken[server.id]
     }
 
     var selectedServerFiles: [FileItem] {
@@ -145,10 +211,11 @@ class ServerManager: ObservableObject {
                 await loadFromSecrets()
             }
 
-            // Select first server if available
+            // Select first server if available and load its data
             if let first = servers.first {
                 selectedSidebar = .server(first.id)
                 await refreshServerStatus(first)
+                await loadConsole(for: first)
             }
         } catch {
             print("Failed to load servers: \(error)")
@@ -224,6 +291,7 @@ class ServerManager: ObservableObject {
                 if let first = servers.first {
                     selectedSidebar = .server(first.id)
                     await refreshServerStatus(first)
+                    await loadConsole(for: first)
                 }
 
                 // Save loaded servers
@@ -256,6 +324,9 @@ class ServerManager: ObservableObject {
         // Cancel any running tasks
         logStreamTasks[server.id]?.cancel()
         logStreamTasks.removeValue(forKey: server.id)
+        mcwrapReattachTasks[server.id]?.cancel()
+        mcwrapReattachTasks.removeValue(forKey: server.id)
+        lastMcwrapReattachAt.removeValue(forKey: server.id)
         sshServices.removeValue(forKey: server.id)
 
         servers.removeAll { $0.id == server.id }
@@ -294,6 +365,169 @@ class ServerManager: ObservableObject {
         return service
     }
 
+    /// Get or create bridge service for a server
+    func bridgeService(for server: Server) -> MCPanelBridgeService {
+        if let existing = bridgeServices[server.id] {
+            // Update configuration in case server settings changed
+            existing.configure(server: server, sshService: sshService(for: server))
+            ensureBridgeCommandTreeSubscription(for: server.id, service: existing)
+            return existing
+        }
+        let service = MCPanelBridgeService()
+        service.configure(server: server, sshService: sshService(for: server))
+        bridgeServices[server.id] = service
+        ensureBridgeCommandTreeSubscription(for: server.id, service: service)
+        return service
+    }
+
+    /// Keep `commandTree` (used by the UI suggestions) in sync with bridge `commands.json` updates.
+    /// Without this, the bridge may have the full tree (including plugin commands) but the UI won't refresh
+    /// because it doesn't observe the bridge service object directly.
+    private func ensureBridgeCommandTreeSubscription(for serverId: UUID, service: MCPanelBridgeService) {
+        if bridgeCommandTreeSubscriptions[serverId] != nil {
+            DebugLogger.shared.log("ensureBridgeCommandTreeSubscription: subscription already exists for \(serverId)", category: .commands, verbose: true)
+            return
+        }
+
+        DebugLogger.shared.log("ensureBridgeCommandTreeSubscription: creating new subscription for \(serverId)", category: .commands)
+
+        bridgeCommandTreeSubscriptions[serverId] = service.$commandTree
+            .receive(on: RunLoop.main)
+            .sink { [weak self] payload in
+                guard let self else { return }
+                guard let payload else {
+                    DebugLogger.shared.log("Combine subscription: payload is nil", category: .commands, verbose: true)
+                    return
+                }
+
+                var tree = BrigadierCommandTree()
+                tree.rootCommands = Set(payload.commands.keys)
+                for (name, node) in payload.commands {
+                    if let children = node.children {
+                        tree.subcommands[name.lowercased()] = Set(children.keys)
+                    }
+                }
+
+                let oCommands = tree.rootCommands.filter { $0.lowercased().hasPrefix("o") }
+                DebugLogger.shared.log("Combine subscription: received \(payload.commands.count) commands, 'o' commands: \(oCommands.sorted()), setting tree for \(serverId)", category: .commands)
+
+                self.commandTree[serverId] = tree
+                self.commandTreeUpdateCount += 1
+                DebugLogger.shared.log("Combine subscription: commandTreeUpdateCount is now \(self.commandTreeUpdateCount)", category: .commands)
+            }
+    }
+
+    /// In mcwrap mode, the bridge plugin may generate `commands.json` *after* MCPanel connects.
+    /// If our initial fetch happens too early (file missing), we never learn plugin commands like `oraxen`.
+    /// We therefore listen for the bridge log line ("Generated command dump") and re-fetch (debounced).
+    private func scheduleBridgeCommandTreeRefresh(for serverId: UUID, reason: String) {
+        guard let server = servers.first(where: { $0.id == serverId }) else { return }
+
+        bridgeCommandTreeRefreshTasks[serverId]?.cancel()
+        bridgeCommandTreeRefreshTasks[serverId] = Task { [weak self] in
+            // Debounce bursts (bridge may log twice on startup / reload)
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard let self, !Task.isCancelled else { return }
+
+            let bridge = self.bridgeService(for: server)
+            print("[Bridge] Refreshing commands.json via SFTP (reason=\(reason))")
+            await bridge.fetchCommandTree()
+            // `commandTreeUpdateCount` is incremented by the Combine subscription in `ensureBridgeCommandTreeSubscription`.
+        }
+    }
+
+    private func lineIndicatesBridgeCommandDump(_ line: String) -> Bool {
+        let lower = line.lowercased()
+        return lower.contains("generated command dump")
+            || (lower.contains("bridge ready") && lower.contains("features:"))
+    }
+
+    private func stripANSIAndTrim(_ line: String) -> String {
+        return line.replacingOccurrences(
+            of: "\u{1B}\\[[0-9;]*[A-Za-z]|\u{1B}\\][^\u{07}]*\u{07}|\u{1B}[^\\[\\]][A-Za-z]",
+            with: "",
+            options: .regularExpression
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func lineIndicatesServerNotRunning(_ line: String) -> Bool {
+        let stripped = stripANSIAndTrim(line)
+        let lower = stripped.lowercased()
+        return lower == "not running" || lower.contains("server is not running")
+    }
+
+    /// If mcwrap reports "Not running", retry attach once the server is back online.
+    private func scheduleMcwrapReattachIfNeeded(for serverId: UUID, reason: String) {
+        guard let server = servers.first(where: { $0.id == serverId }) else { return }
+        guard server.consoleMode == .ptyMcwrap else { return }
+        guard ptyConsumers[serverId]?.isEmpty == false else { return }
+        guard serverRestarting[serverId] != true else { return }
+        guard mcwrapReattachTasks[serverId] == nil else { return }
+
+        mcwrapReattachTasks[serverId] = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.mcwrapReattachTasks.removeValue(forKey: serverId) }
+
+            let startedAt = Date()
+            while !Task.isCancelled {
+                if self.serverRestarting[serverId] == true { break }
+                guard self.lastPTYOutputWasNotRunning[serverId] == true else { break }
+                guard self.ptyConsumers[serverId]?.isEmpty == false else { break }
+                guard let current = self.servers.first(where: { $0.id == serverId }) else { break }
+                guard current.consoleMode == .ptyMcwrap else { break }
+
+                if current.systemdUnit != nil {
+                    await self.refreshServerStatus(current)
+                    guard let updated = self.servers.first(where: { $0.id == serverId }) else { break }
+                    if updated.status == .online {
+                        if await self.performMcwrapReattachIfNeeded(for: updated, reason: reason) { break }
+                    }
+                } else {
+                    if await self.performMcwrapReattachIfNeeded(for: current, reason: reason) { break }
+                }
+
+                if Date().timeIntervalSince(startedAt) > self.mcwrapReattachMaxWaitSeconds {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: UInt64(self.mcwrapReattachPollSeconds * 1_000_000_000))
+            }
+        }
+    }
+
+    private func performMcwrapReattachIfNeeded(for server: Server, reason: String) async -> Bool {
+        guard server.consoleMode == .ptyMcwrap else { return false }
+        guard ptyConsumers[server.id]?.isEmpty == false else { return false }
+
+        let now = Date()
+        if let last = lastMcwrapReattachAt[server.id],
+           now.timeIntervalSince(last) < mcwrapReattachCooldownSeconds {
+            return false
+        }
+
+        lastMcwrapReattachAt[server.id] = now
+        lastPTYOutputWasNotRunning[server.id] = false
+        print("[PTY] mcwrap reported not running; reattaching (reason=\(reason))")
+        await connectPTY(for: server)
+        return true
+    }
+
+    /// Check if bridge is detected for a server
+    func isBridgeDetected(for server: Server) -> Bool {
+        return bridgeServices[server.id]?.bridgeDetected ?? false
+    }
+
+    /// Set dashboard active state (for high-frequency updates)
+    /// When active, requests 500ms update interval from the bridge
+    func setDashboardActive(_ active: Bool, for serverId: UUID) {
+        guard let bridge = bridgeServices[serverId] else { return }
+        bridge.dashboardActive = active
+
+        // TODO: Send set_update_interval request to bridge plugin
+        // For now, the bridge sends updates at a fixed rate, but we could
+        // add a protocol message to request higher frequency when dashboard is visible:
+        // sendBridgeRequest(SetUpdateIntervalRequest(intervalMs: active ? 500 : 10000))
+    }
+
     // MARK: - Server Status
 
     func refreshServerStatus(_ server: Server) async {
@@ -319,6 +553,12 @@ class ServerManager: ObservableObject {
                         await saveServers()
                     }
                 }
+
+                if servers[index].status == .online,
+                   servers[index].consoleMode == .ptyMcwrap,
+                   lastPTYOutputWasNotRunning[server.id] == true {
+                    scheduleMcwrapReattachIfNeeded(for: server.id, reason: "status:online")
+                }
             }
         } catch {
             if let index = servers.firstIndex(where: { $0.id == server.id }) {
@@ -335,6 +575,70 @@ class ServerManager: ObservableObject {
     }
 
     // MARK: - Server Control
+
+    private enum ServerControlAction {
+        case stop
+        case restart
+    }
+
+    private func normalizedCommand(_ command: String) -> String {
+        command.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func availableRootCommands(for server: Server) -> Set<String> {
+        var commands = Set<String>()
+
+        if let tree = commandTree[server.id] {
+            commands.formUnion(tree.rootCommands.map { $0.lowercased() })
+        }
+
+        if let bridgeTree = bridgeServices[server.id]?.commandTree {
+            commands.formUnion(bridgeTree.commands.keys.map { $0.lowercased() })
+        }
+
+        return commands
+    }
+
+    private func controlCommandCandidates(for server: Server, action: ServerControlAction) -> [String] {
+        switch action {
+        case .stop:
+            if server.serverType == .velocity {
+                return ["end", "shutdown", "stop"]
+            }
+            return ["stop", "end", "shutdown"]
+        case .restart:
+            if server.serverType == .velocity {
+                return ["end", "shutdown", "restart", "stop"]
+            }
+            return ["restart", "stop"]
+        }
+    }
+
+    private func resolveControlCommand(for server: Server, action: ServerControlAction) -> String {
+        let candidates = controlCommandCandidates(for: server, action: action)
+        let available = availableRootCommands(for: server)
+
+        if !available.isEmpty {
+            for candidate in candidates where available.contains(candidate.lowercased()) {
+                return candidate
+            }
+        }
+
+        return candidates.first ?? "stop"
+    }
+
+    private func isStopCommand(_ command: String, for server: Server) -> Bool {
+        let normalized = normalizedCommand(command)
+        if server.serverType == .velocity {
+            return normalized == "stop" || normalized == "end" || normalized == "shutdown"
+        }
+        return normalized == "stop"
+    }
+
+    private func isRestartCommand(_ command: String) -> Bool {
+        let normalized = normalizedCommand(command)
+        return normalized == "restart" || normalized == "rl"
+    }
 
     func startServer(_ server: Server) async {
         let ssh = sshService(for: server)
@@ -361,17 +665,32 @@ class ServerManager: ObservableObject {
             servers[index].status = .stopping
         }
 
+        serverRestarting[server.id] = false
+        restartRequestedAt.removeValue(forKey: server.id)
+        stopRestartWatchdog(for: server.id)
+
+        let stopCommand = resolveControlCommand(for: server, action: .stop)
+
         // Prefer sending stop via the live console so the user can see the shutdown happen.
         // This also avoids requiring systemctl permissions in some setups.
         if ptyConnected[server.id] == true {
-            await sendPTYCommand("stop", to: server)
+            await sendPTYCommand(stopCommand, to: server)
         } else {
             // Fall back to whichever mechanism is available (RCON/screen/tmux auto-detect).
-            do {
-                try await ssh.sendCommand("stop")
-            } catch {
-                // We'll still try the more forceful stop path below.
-                print("[Stop] Failed to send stop command: \(error)")
+            if server.systemdUnit != nil {
+                do {
+                    try await ssh.stopServer()
+                } catch {
+                    // We'll still try the more forceful stop path below.
+                    print("[Stop] Failed to stop via systemd: \(error)")
+                }
+            } else {
+                do {
+                    try await ssh.sendCommand(stopCommand)
+                } catch {
+                    // We'll still try the more forceful stop path below.
+                    print("[Stop] Failed to send stop command: \(error)")
+                }
             }
         }
 
@@ -385,7 +704,9 @@ class ServerManager: ObservableObject {
         }
 
         do {
-            try await ssh.stopServer()
+            if server.systemdUnit != nil {
+                try await ssh.stopServer()
+            }
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             await refreshServerStatus(server)
         } catch {
@@ -399,21 +720,32 @@ class ServerManager: ObservableObject {
             servers[index].status = .stopping
         }
 
-        // Prefer the in-console restart command so the user sees it, and it works even without systemctl.
-        // (Paper/Spigot commonly support a `restart` console command via restart scripts.)
-        if ptyConnected[server.id] == true {
-            await sendPTYCommand("restart", to: server)
-        } else {
-            let ssh = sshService(for: server)
+        // Mark server as restarting so PTY can auto-reconnect (PTY modes only)
+        let shouldReconnectConsole = server.consoleMode != .logTail
+        serverRestarting[server.id] = shouldReconnectConsole
+        restartRequestedAt[server.id] = Date()
+        if shouldReconnectConsole {
+            startRestartWatchdog(for: server)
+        }
+
+        // Restart strategy:
+        // - If systemd is configured, prefer `systemctl restart` (reliable; doesn't depend on Paper restart scripts).
+        // - Otherwise, fall back to in-console `restart` command.
+        let ssh = sshService(for: server)
+        let restartCommand = resolveControlCommand(for: server, action: .restart)
+        if server.systemdUnit != nil {
             do {
-                try await ssh.sendCommand("restart")
+                try await ssh.restartServer()
             } catch {
-                // Fall back to systemd restart if configured
-                do {
-                    try await ssh.restartServer()
-                } catch {
-                    errorMessage = error.localizedDescription
-                }
+                errorMessage = error.localizedDescription
+            }
+        } else if ptyConnected[server.id] == true {
+            await sendPTYCommand(restartCommand, to: server)
+        } else {
+            do {
+                try await ssh.sendCommand(restartCommand)
+            } catch {
+                errorMessage = error.localizedDescription
             }
         }
 
@@ -478,6 +810,22 @@ class ServerManager: ObservableObject {
         history.add(command)
         commandHistory[server.id] = history
 
+        // Detect restart/stop commands to enable auto-reconnection
+        let lowercaseCommand = normalizedCommand(command)
+        if isRestartCommand(lowercaseCommand) {
+            serverRestarting[server.id] = true
+            restartRequestedAt[server.id] = Date()
+            print("[PTY] Detected restart command, enabling auto-reconnect")
+            if server.consoleMode != .logTail {
+                startRestartWatchdog(for: server)
+            }
+        } else if isStopCommand(lowercaseCommand, for: server) {
+            // For stop, we don't auto-reconnect - user needs to start manually
+            serverRestarting[server.id] = false
+            restartRequestedAt.removeValue(forKey: server.id)
+            stopRestartWatchdog(for: server.id)
+        }
+
         // Don't add command to console - let the server echo it back via PTY
         // This avoids duplicate display and keeps the UI consistent with server behavior
 
@@ -511,6 +859,64 @@ class ServerManager: ObservableObject {
         } catch {
             errorMessage = "Failed to detect sessions: \(error.localizedDescription)"
         }
+    }
+
+    /// Acquire a PTY connection for a UI consumer (console/dashboard).
+    /// Keeps the connection alive while at least one consumer is active.
+    func acquirePTY(for server: Server, consumer: PTYConsumer) async {
+        let serverId = server.id
+        var consumers = ptyConsumers[serverId] ?? []
+        consumers.insert(consumer)
+        ptyConsumers[serverId] = consumers
+        cancelPendingPTYDisconnect(for: serverId)
+
+        // Log tail mode doesn't use PTY; just refresh console output.
+        if server.consoleMode == .logTail {
+            await loadConsole(for: server)
+            return
+        }
+
+        // Only connect if we aren't already connected.
+        if ptyConnected[serverId] != true || ptyServices[serverId] == nil {
+            await connectPTY(for: server)
+        }
+    }
+
+    /// Release a PTY consumer and schedule a disconnect if no one else is using it.
+    func releasePTY(for server: Server, consumer: PTYConsumer, delaySeconds: TimeInterval? = nil) {
+        let serverId = server.id
+        var consumers = ptyConsumers[serverId] ?? []
+        consumers.remove(consumer)
+        ptyConsumers[serverId] = consumers
+
+        guard consumers.isEmpty else { return }
+
+        let delay = delaySeconds ?? ptyDisconnectGraceSeconds
+        schedulePTYDisconnect(for: server, delaySeconds: delay)
+    }
+
+    private func schedulePTYDisconnect(for server: Server, delaySeconds: TimeInterval) {
+        let serverId = server.id
+        cancelPendingPTYDisconnect(for: serverId)
+
+        ptyDisconnectTasks[serverId] = Task { [weak self] in
+            let clampedDelay = max(0, delaySeconds)
+            if clampedDelay > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(clampedDelay * 1_000_000_000))
+            }
+            guard let self, !Task.isCancelled else { return }
+
+            // Only disconnect if no consumers re-acquired the PTY.
+            let consumers = self.ptyConsumers[serverId] ?? []
+            guard consumers.isEmpty else { return }
+
+            await self.disconnectPTY(for: server)
+        }
+    }
+
+    private func cancelPendingPTYDisconnect(for serverId: UUID) {
+        ptyDisconnectTasks[serverId]?.cancel()
+        ptyDisconnectTasks.removeValue(forKey: serverId)
     }
 
     /// Connect to PTY console (screen/tmux session)
@@ -555,6 +961,12 @@ class ServerManager: ObservableObject {
                 await pty.setTerminalSize(cols: desired.cols, rows: desired.rows)
             }
 
+            // For mcwrap mode, hydrate the console from scrollback first so we don't miss startup logs
+            // during reconnects/restarts. The warmup approach builds ANSI state from earlier lines.
+            if server.consoleMode == .ptyMcwrap {
+                await hydrateConsoleFromMcwrapScrollback(for: server, forceReplace: true)
+            }
+
             // Start streaming PTY output
             startPTYStream(for: server)
 
@@ -580,11 +992,117 @@ class ServerManager: ObservableObject {
         }
     }
 
+    /// Hydrate/patch the visible console using `mcwrap-pty log` so we don't miss logs during reconnects.
+    /// This merges scrollback with the existing in-memory console when possible, otherwise replaces it.
+    ///
+    /// **ANSI State Warmup**: When loading scrollback, earlier lines may have set ANSI color state
+    /// that carries into later lines. We parse extra "warmup" lines to build this state,
+    /// then serialize it as an ANSI prefix for the first displayed line.
+    private func hydrateConsoleFromMcwrapScrollback(for server: Server, forceReplace: Bool = false) async {
+        guard server.consoleMode == .ptyMcwrap else { return }
+        guard let scrollback = await fetchScrollbackHistory(for: server) else { return }
+
+        let filteredScrollback = MCPanelBridgeProtocol.filterConsoleOutput(scrollback)
+        let allLines = filteredScrollback
+            .components(separatedBy: .newlines)
+            .filter { !$0.isEmpty }
+            .filter { !shouldFilterLine($0) }
+        guard !allLines.isEmpty else { return }
+
+        let serverId = server.id
+
+        // Helper to strip ANSI for matching
+        func stripANSI(_ s: String) -> String {
+            s.replacingOccurrences(
+                of: "\u{1B}\\[[0-9;]*[A-Za-z]|\u{1B}\\][^\u{07}]*\u{07}|\u{1B}[^\\[\\]][A-Za-z]",
+                with: "",
+                options: .regularExpression
+            )
+        }
+
+        let fetchedStripped = allLines.map(stripANSI)
+        let existing = consoleMessages[serverId] ?? []
+        let existingTail = Array(existing.suffix(50))
+
+        // Find best match: last existing line that appears in fetched scrollback.
+        var matchIndexInFetched: Int?
+        for msg in existingTail.reversed() {
+            let needleRaw = msg.content
+            let needleStripped = stripANSI(needleRaw)
+            if let idx = fetchedStripped.lastIndex(where: { $0 == needleStripped || $0 == needleRaw }) {
+                matchIndexInFetched = idx
+                break
+            }
+        }
+
+        let newMessages: [ConsoleMessage]
+        if !forceReplace, let idx = matchIndexInFetched, idx + 1 < allLines.count {
+            // Append only the new portion.
+            // For incremental append, use warmup from the start of ALL lines up to idx
+            let warmupParser = ANSIParser()
+            for i in 0...idx {
+                _ = warmupParser.process(allLines[i])
+            }
+            let statePrefix = warmupParser.hasNonDefaultState ? warmupParser.currentStateAsANSI() : ""
+
+            let appendLines = Array(allLines[(idx + 1)...])
+            var merged = existing
+            for (i, line) in appendLines.enumerated() {
+                // Prepend ANSI state to the first line only
+                let content = (i == 0 && !statePrefix.isEmpty) ? statePrefix + line : line
+                merged.append(ConsoleMessage(level: .info, content: content, rawANSI: true, isScrollback: true))
+            }
+            if merged.count > 1000 {
+                merged.removeFirst(merged.count - 1000)
+            }
+            newMessages = merged
+        } else {
+            // Replace with last portion of scrollback (more reliable than guessing)
+            // Use earlier lines as warmup to build ANSI state
+            let displayCount = 800
+            let warmupCount = max(0, allLines.count - displayCount)
+
+            // Parse warmup lines to build ANSI state
+            let warmupParser = ANSIParser()
+            for i in 0..<warmupCount {
+                _ = warmupParser.process(allLines[i])
+            }
+
+            // Get the accumulated state as an ANSI sequence
+            let statePrefix = warmupParser.hasNonDefaultState ? warmupParser.currentStateAsANSI() : ""
+
+            // Create messages for display lines
+            let displayLines = Array(allLines.suffix(displayCount))
+            var messages: [ConsoleMessage] = []
+            for (i, line) in displayLines.enumerated() {
+                // Prepend ANSI state to the first line only
+                let content = (i == 0 && !statePrefix.isEmpty) ? statePrefix + line : line
+                messages.append(ConsoleMessage(level: .info, content: content, rawANSI: true, isScrollback: true))
+            }
+            newMessages = messages
+        }
+
+        consoleMessages[serverId] = newMessages
+        // Force a full re-render so ANSI state is rebuilt from scrollback.
+        consoleRenderToken[serverId] = UUID()
+    }
+
     /// Disconnect from PTY console
     func disconnectPTY(for server: Server) async {
+        // Cancel any pending delayed disconnect for this server
+        cancelPendingPTYDisconnect(for: server.id)
+        mcwrapReattachTasks[server.id]?.cancel()
+        mcwrapReattachTasks.removeValue(forKey: server.id)
+
         // Cancel stream task
         ptyStreamTasks[server.id]?.cancel()
         ptyStreamTasks.removeValue(forKey: server.id)
+        lastPTYOutputWasNotRunning[server.id] = false
+        // If we're in the middle of a restart, the watchdog may be the thing
+        // driving reconnection. Don't cancel it here.
+        if serverRestarting[server.id] != true {
+            stopRestartWatchdog(for: server.id)
+        }
 
         // Disconnect PTY
         if let pty = ptyServices[server.id] {
@@ -592,6 +1110,52 @@ class ServerManager: ObservableObject {
         }
         ptyServices.removeValue(forKey: server.id)
         ptyConnected[server.id] = false
+
+        // Reset bridge service
+        bridgeServices[server.id]?.reset()
+    }
+
+    /// Fetch scrollback history from tmux/mcwrap session
+    /// Returns the scrollback content that can be fed to a terminal
+    func fetchScrollbackHistory(for server: Server) async -> String? {
+        let ssh = sshService(for: server)
+
+        do {
+            switch server.consoleMode {
+            case .ptyTmux:
+                // Get tmux session name
+                let sessionName = server.tmuxSession ?? "minecraft"
+                // Capture full scrollback history from tmux (-S - means from start of scrollback)
+                // -p prints to stdout, -e includes escape sequences for colors
+                let scrollback = try await ssh.execute("tmux capture-pane -t '\(sessionName)' -p -S - -e 2>/dev/null || echo ''")
+                if !scrollback.isEmpty {
+                    print("[Scrollback] Fetched \(scrollback.count) bytes from tmux session '\(sessionName)'")
+                    return scrollback
+                }
+            case .ptyMcwrap:
+                // Use mcwrap-pty's log command to get console history (falls back to mcwrap)
+                // This outputs the scrollback buffer with ANSI colors preserved
+                // Use a larger window to reliably cover startup after restart/reconnect.
+                let scrollback = try await ssh.execute("mcwrap-pty log '\(server.serverPath)' 2000 2>/dev/null || mcwrap log '\(server.serverPath)' 2000 2>/dev/null || echo ''")
+                if !scrollback.isEmpty && scrollback != "\n" {
+                    print("[Scrollback] Fetched \(scrollback.count) bytes from mcwrap log")
+                    return scrollback
+                }
+            case .logTail:
+                // For log tail mode, load from latest.log
+                let logOutput = try await ssh.tailLog(lines: 500)
+                if !logOutput.isEmpty {
+                    print("[Scrollback] Fetched \(logOutput.count) bytes from latest.log")
+                    return logOutput
+                }
+            default:
+                break
+            }
+        } catch {
+            print("[Scrollback] Failed to fetch history: \(error)")
+        }
+
+        return nil
     }
 
     /// Start streaming PTY output
@@ -603,22 +1167,35 @@ class ServerManager: ObservableObject {
 
         let serverId = server.id
 
+        // Initialize bridge service (configured with RCON for sending requests)
+        let bridge = bridgeService(for: server)
+
         ptyStreamTasks[server.id] = Task {
             let stream = await pty.streamOutput()
             for await chunk in stream {
                 guard !Task.isCancelled else { break }
 
-                // Send raw output to SwiftTerm callback if registered
+                await MainActor.run {
+                    self.lastPTYOutputAt[serverId] = Date()
+                }
+
+                // Process through bridge service to detect/handle bridge messages
+                let filteredChunk = await MainActor.run {
+                    return bridge.processOutput(chunk)
+                }
+
+                // Send filtered output to SwiftTerm callback if registered
                 await MainActor.run {
                     if let callback = self.ptyOutputCallbacks[serverId] {
-                        callback(chunk)
+                        callback(filteredChunk)
                     }
                 }
 
                 // Also process for legacy console messages (can be removed once SwiftTerm is fully integrated)
                 await MainActor.run {
                     // Split by newlines but preserve the raw output for ANSI parsing
-                    let lines = chunk.components(separatedBy: "\n")
+                    let lines = filteredChunk.components(separatedBy: "\n")
+
                     for (index, line) in lines.enumerated() {
                         // Skip empty lines except the last one (might be partial)
                         if line.isEmpty && index < lines.count - 1 { continue }
@@ -629,6 +1206,20 @@ class ServerManager: ObservableObject {
 
                         // Filter out server prompt lines and command echoes
                         if self.shouldFilterLine(line) { continue }
+
+                        if server.consoleMode == .ptyMcwrap {
+                            if self.lineIndicatesServerNotRunning(line) {
+                                self.lastPTYOutputWasNotRunning[serverId] = true
+                                self.scheduleMcwrapReattachIfNeeded(for: serverId, reason: "console:not-running")
+                            } else {
+                                self.lastPTYOutputWasNotRunning[serverId] = false
+                            }
+                        }
+
+                        // If MCPanelBridge just regenerated commands.json, refresh our cached tree.
+                        if self.lineIndicatesBridgeCommandDump(line) {
+                            self.scheduleBridgeCommandTreeRefresh(for: serverId, reason: "console:\(line.prefix(64))")
+                        }
 
                         // Create message - PTY output should be treated as raw with ANSI codes
                         let message = ConsoleMessage(
@@ -649,10 +1240,177 @@ class ServerManager: ObservableObject {
                 }
             }
 
-            // Stream ended - mark as disconnected
+            // Stream ended - mark as disconnected and attempt reconnect if server is restarting
             await MainActor.run {
                 self.ptyConnected[serverId] = false
+
+                // If server is restarting, attempt to reconnect after a delay
+                if self.serverRestarting[serverId] == true {
+                    // Get the server object to reconnect
+                    if let server = self.servers.first(where: { $0.id == serverId }) {
+                        Task {
+                            await self.attemptPTYReconnect(for: server)
+                        }
+                    }
+                }
             }
+        }
+    }
+
+    /// Watchdog to keep console output alive during restart.
+    /// Some backends (notably mcwrap) keep the SSH process alive but stop emitting output after a restart,
+    /// requiring a fresh attach. This watchdog forces a clean reattach when output goes stale.
+    private func startRestartWatchdog(for server: Server) {
+        let serverId = server.id
+
+        restartWatchdogTasks[serverId]?.cancel()
+        restartWatchdogTasks[serverId] = Task {
+            // Allow the restart command to take effect first.
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+
+            let startedAt = Date()
+            var didAttemptReconnect = false
+            while !Task.isCancelled, serverRestarting[serverId] == true {
+                // Only meaningful for PTY modes.
+                guard server.consoleMode != .logTail else {
+                    serverRestarting[serverId] = false
+                    restartRequestedAt.removeValue(forKey: serverId)
+                    break
+                }
+
+                // If we've received output recently, keep waiting.
+                let lastOutput = await MainActor.run { self.lastPTYOutputAt[serverId] }
+                let secondsSinceOutput: TimeInterval = {
+                    guard let lastOutput else { return 999 }
+                    return Date().timeIntervalSince(lastOutput)
+                }()
+
+                // Refresh status occasionally so we know when the server is back.
+                await refreshServerStatus(server)
+
+                let isConnected = self.ptyConnected[serverId] == true
+                let requestedAt = await MainActor.run { self.restartRequestedAt[serverId] } ?? startedAt
+
+                // If connection is down, reconnect (even if status is unknown).
+                if !isConnected {
+                    await connectPTY(for: server)
+                    didAttemptReconnect = didAttemptReconnect || (self.ptyConnected[serverId] == true)
+                }
+
+                // If still "connected" but output is stale for a while, force a fresh attach.
+                if self.ptyConnected[serverId] == true && secondsSinceOutput > 8 {
+                    print("[PTY] Watchdog: output stale (\(Int(secondsSinceOutput))s). Forcing reattach...")
+                    await connectPTY(for: server)
+                    didAttemptReconnect = true
+                }
+
+                // Consider restart handled once we see *new* output after the restart request
+                // and we've attempted at least one reconnect/reattach.
+                let notRunningGateSatisfied: Bool = {
+                    guard server.consoleMode == .ptyMcwrap else { return true }
+                    return self.lastPTYOutputWasNotRunning[serverId] != true
+                }()
+
+                if didAttemptReconnect,
+                   self.ptyConnected[serverId] == true,
+                   let lastOutput,
+                   lastOutput > requestedAt,
+                   secondsSinceOutput < 2,
+                   notRunningGateSatisfied {
+                    self.serverRestarting[serverId] = false
+                    self.restartRequestedAt.removeValue(forKey: serverId)
+                    break
+                }
+
+                // Safety: don't keep retrying forever.
+                if Date().timeIntervalSince(startedAt) > 90 {
+                    print("[PTY] Watchdog: timed out waiting for console output after restart.")
+                    self.serverRestarting[serverId] = false
+                    self.restartRequestedAt.removeValue(forKey: serverId)
+                    break
+                }
+
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+        }
+    }
+
+    private func stopRestartWatchdog(for serverId: UUID) {
+        restartWatchdogTasks[serverId]?.cancel()
+        restartWatchdogTasks.removeValue(forKey: serverId)
+        restartRequestedAt.removeValue(forKey: serverId)
+    }
+
+    /// Attempt to reconnect PTY after server restart with retries
+    private func attemptPTYReconnect(for server: Server, attempt: Int = 1, maxAttempts: Int = 10) async {
+        let serverId = server.id
+
+        // Check if we should still be trying to reconnect
+        guard serverRestarting[serverId] == true else {
+            print("[PTY] Reconnection cancelled - server no longer restarting")
+            return
+        }
+
+        // Wait before attempting reconnect (longer wait on later attempts)
+        let delaySeconds = min(2 + attempt, 10)  // 3s, 4s, 5s, ..., up to 10s
+        print("[PTY] Waiting \(delaySeconds)s before reconnect attempt \(attempt)/\(maxAttempts)")
+        try? await Task.sleep(nanoseconds: UInt64(delaySeconds) * 1_000_000_000)
+
+        // Check again after sleep
+        guard serverRestarting[serverId] == true else {
+            print("[PTY] Reconnection cancelled after wait")
+            return
+        }
+
+        // Try to detect if the session exists
+        do {
+            let sessions = try await ptyService(for: server).detectSessions()
+            let hasMatchingSession: Bool
+
+            switch server.consoleMode {
+            case .ptyTmux:
+                hasMatchingSession = sessions.contains { $0.type == .tmux && (server.tmuxSession == nil || $0.name == server.tmuxSession) }
+            case .ptyScreen:
+                // GNU screen reports sessions as "<pid>.<name>". Users often configure just "<name>".
+                // Treat either exact match or suffix match as valid.
+                if let configured = server.screenSession, !configured.isEmpty {
+                    hasMatchingSession = sessions.contains { s in
+                        guard s.type == .screen else { return false }
+                        return s.name == configured || s.name.hasSuffix(".\(configured)")
+                    }
+                } else {
+                    hasMatchingSession = sessions.contains { $0.type == .screen }
+                }
+            case .ptyMcwrap:
+                // mcwrap creates a new session when server starts
+                hasMatchingSession = true
+            default:
+                hasMatchingSession = !sessions.isEmpty
+            }
+
+            if hasMatchingSession {
+                print("[PTY] Session found, attempting reconnect...")
+                await connectPTY(for: server)
+
+                // Check if reconnection succeeded
+                if ptyConnected[serverId] == true {
+                    print("[PTY] Reconnected successfully after restart!")
+                    serverRestarting[serverId] = false
+                    return
+                }
+            } else {
+                print("[PTY] Session not yet available (attempt \(attempt))")
+            }
+        } catch {
+            print("[PTY] Error detecting sessions: \(error)")
+        }
+
+        // Retry if we haven't exceeded max attempts
+        if attempt < maxAttempts {
+            await attemptPTYReconnect(for: server, attempt: attempt + 1, maxAttempts: maxAttempts)
+        } else {
+            print("[PTY] Max reconnection attempts reached, giving up")
+            serverRestarting[serverId] = false
         }
     }
 
@@ -666,18 +1424,50 @@ class ServerManager: ObservableObject {
         ptyOutputCallbacks.removeValue(forKey: server.id)
     }
 
-    /// Check if a line should be filtered (standalone prompts only)
+    /// Check if a line should be filtered (standalone prompts, empty log lines)
     private func shouldFilterLine(_ line: String) -> Bool {
         // Strip ANSI escape sequences for pattern matching
-        let stripped = line.replacingOccurrences(
-            of: "\u{1B}\\[[0-9;]*[A-Za-z]|\u{1B}\\][^\u{07}]*\u{07}|\u{1B}[^\\[\\]][A-Za-z]",
-            with: "",
-            options: .regularExpression
-        ).trimmingCharacters(in: .whitespaces)
+        let stripped = stripANSIAndTrim(line)
+
+        // Filter completely empty lines
+        if stripped.isEmpty {
+            // Preserve ANSI-only lines (e.g., reset sequences) to keep parser state correct.
+            if line.contains("\u{1B}") {
+                return false
+            }
+            return true
+        }
 
         // Filter standalone prompt lines (just ">") - these are redundant with our UI prompt
         if stripped == ">" || stripped == "> " {
             return true
+        }
+
+        // Filter empty log lines (timestamp prefix with no content after OSC stripping)
+        // Covers common formats like:
+        // [HH:MM:SS INFO]:, [HH:MM:SS] [Server thread/INFO]:, or bare timestamps.
+        let emptyLogPatterns = [
+            // Paper/Spigot style: [HH:MM:SS INFO]:
+            #"^\[\d{2}:\d{2}:\d{2}\s+(INFO|WARN|ERROR|DEBUG)\]:?\s*$"#,
+            // Thread style: [HH:MM:SS] [Server thread/INFO]:
+            #"^\[\d{2}:\d{2}:\d{2}\]\s*\[[^\]]+/(INFO|WARN|ERROR|DEBUG)\]:?\s*$"#,
+            // Bare timestamp with thread: HH:MM:SS [Thread/INFO]:
+            #"^\d{2}:\d{2}:\d{2}\s+\[[^\]]+/(INFO|WARN|ERROR|DEBUG)\]:?\s*$"#,
+            // Bare timestamp in brackets: [HH:MM:SS]
+            #"^\[\d{2}:\d{2}:\d{2}\]\s*$"#,
+            // Bare timestamp: HH:MM:SS
+            #"^\d{2}:\d{2}:\d{2}\s*$"#,
+            // Log4j style: HH:MM:SS.mmm
+            #"^\d{2}:\d{2}:\d{2}\.\d{3}\s*$"#,
+            // ISO style timestamps
+            #"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s*$"#,
+            // Log prefix with no message (flexible thread name)
+            #"^\[\d{2}:\d{2}:\d{2}[^\]]*\]\s*\[[^\]]+\]:?\s*$"#,
+        ]
+        for pattern in emptyLogPatterns {
+            if stripped.range(of: pattern, options: .regularExpression) != nil {
+                return true
+            }
         }
 
         return false
@@ -732,6 +1522,81 @@ class ServerManager: ObservableObject {
     /// Check if PTY is connected for a server
     func isPTYConnected(for server: Server) -> Bool {
         return ptyConnected[server.id] == true
+    }
+
+    // MARK: - Dynamic Command Discovery
+
+    /// Discover available commands from the server
+    /// Uses MCPanel Bridge commands.json file exclusively
+    func scrapeServerCommands(for server: Server) {
+        // Cancel any existing discovery task
+        commandDiscoveryTask[server.id]?.cancel()
+
+        commandDiscoveryTask[server.id] = Task {
+            // Brief delay to let connection stabilize
+            try? await Task.sleep(nanoseconds: 500_000_000)  // 0.5 seconds
+
+            guard !Task.isCancelled else { return }
+
+            let logger = DebugLogger.shared
+            logger.log("Starting command discovery for server", category: .commands)
+
+            // Use MCPanel Bridge commands.json file via SSH
+            let bridge = bridgeService(for: server)
+            await bridge.fetchCommandTree()
+
+            if let bridgeTree = bridge.commandTree {
+                var tree = BrigadierCommandTree()
+                tree.rootCommands = Set(bridgeTree.commands.keys)
+
+                for (name, node) in bridgeTree.commands {
+                    if let children = node.children {
+                        tree.subcommands[name.lowercased()] = Set(children.keys)
+                    }
+                }
+
+                let oCommands = tree.rootCommands.filter { $0.lowercased().hasPrefix("o") }
+                logger.log("Found \(tree.rootCommands.count) commands from Bridge, 'o' commands: \(oCommands.sorted())", category: .commands)
+                await MainActor.run {
+                    self.commandTree[server.id] = tree
+                    self.commandTreeUpdateCount += 1
+                }
+            } else {
+                logger.log("No commands discovered from Bridge - autocomplete will use history only", category: .commands)
+            }
+        }
+    }
+
+    /// Get all known commands for a server (discovered + history)
+    func allKnownCommands(for server: Server) -> [String] {
+        var commands = Set<String>()
+
+        // Add discovered commands from Brigadier tree
+        if let tree = commandTree[server.id] {
+            commands.formUnion(tree.rootCommands)
+        }
+
+        // Add commands from history
+        if let history = commandHistory[server.id] {
+            for cmd in history.commands {
+                let parts = cmd.split(separator: " ", maxSplits: 1)
+                if let root = parts.first {
+                    commands.insert(String(root).lowercased())
+                }
+            }
+        }
+
+        return commands.sorted()
+    }
+
+    /// Get subcommands for a specific command (for hierarchical suggestions)
+    func getSubcommands(for command: String, server: Server) -> [String] {
+        return commandTree[server.id]?.getSubcommands(for: command) ?? []
+    }
+
+    /// Check if a command has subcommands
+    func hasSubcommands(for command: String, server: Server) -> Bool {
+        return commandTree[server.id]?.hasSubcommands(command) ?? false
     }
 
     /// Check if a line is a tmux status line that should be filtered out

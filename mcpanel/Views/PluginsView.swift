@@ -221,49 +221,68 @@ struct PluginRow: View {
 
     @State private var isHovered = false
 
+    private var statusColor: Color {
+        plugin.isEnabled ? Color(hex: "10B981") : Color(hex: "64748B")  // Emerald or Slate
+    }
+
     var body: some View {
-        HStack(spacing: 16) {
-            // Plugin icon
+        HStack(spacing: 14) {
+            // Plugin icon with status indicator
             ZStack {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color(hex: plugin.statusColor).opacity(0.2))
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(statusColor.opacity(0.15))
 
                 Image(systemName: "puzzlepiece.extension.fill")
                     .font(.system(size: 18))
-                    .foregroundColor(Color(hex: plugin.statusColor))
+                    .foregroundColor(statusColor)
             }
-            .frame(width: 40, height: 40)
+            .frame(width: 42, height: 42)
+            .overlay(alignment: .bottomTrailing) {
+                // Small status dot
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 8, height: 8)
+                    .overlay {
+                        Circle()
+                            .stroke(Color(hex: "161618"), lineWidth: 2)
+                    }
+                    .offset(x: 2, y: 2)
+            }
 
             // Plugin info
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
                     Text(plugin.name)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(plugin.isEnabled ? .primary : .secondary)
-                        .strikethrough(!plugin.isEnabled, color: .secondary)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(plugin.isEnabled ? .white : .white.opacity(0.5))
 
                     if let version = plugin.version {
                         Text("v\(version)")
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(.white.opacity(0.5))
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Color.white.opacity(0.05))
+                            .background(Color.white.opacity(0.06))
                             .clipShape(Capsule())
                     }
                 }
 
                 Text(plugin.fileName)
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.4))
             }
 
             Spacer()
 
-            // File size
-            Text(plugin.formattedFileSize)
-                .font(.system(size: 12))
-                .foregroundColor(.secondary)
+            // File size with icon
+            HStack(spacing: 4) {
+                Image(systemName: "doc.fill")
+                    .font(.system(size: 9))
+                    .foregroundColor(.white.opacity(0.3))
+                Text(plugin.formattedFileSize)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.5))
+            }
 
             // Enable/Disable toggle
             Toggle("", isOn: Binding(
@@ -272,12 +291,19 @@ struct PluginRow: View {
             ))
             .toggleStyle(.switch)
             .controlSize(.small)
+            .tint(Color(hex: "10B981"))
         }
-        .padding(12)
+        .padding(14)
         .background {
-            RoundedRectangle(cornerRadius: 10)
-                .fill(isHovered ? Color.white.opacity(0.05) : Color.white.opacity(0.02))
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.white.opacity(isHovered ? 0.05 : 0.02))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.white.opacity(isHovered ? 0.1 : 0.04), lineWidth: 1)
+                }
         }
+        .scaleEffect(isHovered ? 1.005 : 1.0)
+        .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isHovered)
         .onHover { isHovered = $0 }
     }
 }

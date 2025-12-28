@@ -32,7 +32,7 @@ struct ConsoleView: View {
                     if server.consoleMode == .logTail {
                         await serverManager.loadConsole(for: server)
                     } else {
-                        await serverManager.connectPTY(for: server)
+                        await serverManager.acquirePTY(for: server, consumer: .console)
                     }
                 }
             }
@@ -40,9 +40,7 @@ struct ConsoleView: View {
         .onDisappear {
             // Disconnect PTY when leaving
             if let server = serverManager.selectedServer {
-                Task {
-                    await serverManager.disconnectPTY(for: server)
-                }
+                serverManager.releasePTY(for: server, consumer: .console)
             }
         }
     }
@@ -96,10 +94,11 @@ struct ConsoleView: View {
     // MARK: - Command Input
 
     private var commandInput: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
+            // Prompt indicator
             Text(">")
-                .font(.custom("Menlo", size: 12))
-                .foregroundStyle(Color(hex: "22C55E"))
+                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                .foregroundStyle(Color(hex: "10B981"))  // Emerald
 
             TabInterceptingTextField(
                 text: $commandText,
@@ -112,28 +111,29 @@ struct ConsoleView: View {
             )
             .font(.custom("Menlo", size: 12))
 
+            // Send button
             Button {
                 sendCommand()
             } label: {
                 Image(systemName: "paperplane.fill")
-                    .font(.system(size: 12))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(commandText.isEmpty ? .white.opacity(0.3) : Color(hex: "10B981"))
             }
             .buttonStyle(.plain)
-            .foregroundColor(.secondary)
             .disabled(commandText.isEmpty)
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.vertical, 12)
         .background {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(.ultraThinMaterial)
                 .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
                 }
         }
-        .padding(.horizontal, 12)
-        .padding(.bottom, 12)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 16)
     }
 
     // MARK: - Actions
@@ -320,8 +320,8 @@ struct ConsoleLineView: View {
     // Parse content and apply color codes (ANSI or Minecraft)
     private var coloredContent: AttributedString {
         if message.rawANSI {
-            // Use ANSI parser directly for PTY output
-            return ANSIParser.parse(message.content)
+            // PTY output can contain ANSI escapes or Minecraft/Adventure formatting; support both.
+            return MinecraftColorParser.parse(message.content, defaultColor: message.level.textColor)
         } else {
             // Use the Minecraft color parser for log output
             return MinecraftColorParser.parse(message.content, defaultColor: message.level.textColor)

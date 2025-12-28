@@ -1,0 +1,8 @@
+{
+  "id": "mcpanel-bridge",
+  "name": "MCPanel Bridge",
+  "version": "${version}",
+  "description": "Bridge plugin for MCPanel - Real-time console communication",
+  "authors": ["Th0rgal"],
+  "main": "dev.th0rgal.mcpanel.bridge.velocity.MCPanelBridgeVelocity"
+}

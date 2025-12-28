@@ -60,11 +60,58 @@ actor SSHService {
         process.standardOutput = outputPipe
         process.standardError = errorPipe
 
+        let logger = DebugLogger.shared
+        let shortCmd = String(command.prefix(60))
+        logger.log("execute: Starting process for '\(shortCmd)...'", category: .ssh, verbose: true)
+
+        // Accumulate output data asynchronously to avoid pipe buffer blocking
+        // Use a class wrapper to safely capture mutable state in concurrent closures
+        final class DataAccumulator: @unchecked Sendable {
+            var data = Data()
+            let lock = NSLock()
+            func append(_ newData: Data) {
+                lock.lock()
+                data.append(newData)
+                lock.unlock()
+            }
+            func getData() -> Data {
+                lock.lock()
+                defer { lock.unlock() }
+                return data
+            }
+        }
+
+        let outputAccumulator = DataAccumulator()
+        let errorAccumulator = DataAccumulator()
+
+        // Read output asynchronously to prevent pipe buffer from filling
+        let outputHandle = outputPipe.fileHandleForReading
+        let errorHandle = errorPipe.fileHandleForReading
+
+        outputHandle.readabilityHandler = { handle in
+            let data = handle.availableData
+            if !data.isEmpty {
+                outputAccumulator.append(data)
+            }
+        }
+
+        errorHandle.readabilityHandler = { handle in
+            let data = handle.availableData
+            if !data.isEmpty {
+                errorAccumulator.append(data)
+            }
+        }
+
         do {
             try process.run()
         } catch {
+            outputHandle.readabilityHandler = nil
+            errorHandle.readabilityHandler = nil
+            logger.log("execute: Process launch failed: \(error)", category: .ssh)
             throw SSHError.connectionFailed(error.localizedDescription)
         }
+
+        logger.log("execute: Process running, waiting up to \(Int(timeout))s", category: .ssh, verbose: true)
 
         // Wait with timeout
         let deadline = Date().addingTimeInterval(timeout)
@@ -72,21 +119,29 @@ actor SSHService {
             try await Task.sleep(nanoseconds: 100_000_000)  // 100ms
         }
 
+        // Clean up handlers
+        outputHandle.readabilityHandler = nil
+        errorHandle.readabilityHandler = nil
+
         if process.isRunning {
+            logger.log("execute: Process timed out after \(Int(timeout))s, terminating", category: .ssh)
             process.terminate()
             throw SSHError.timeout
         }
 
-        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+        // Read any remaining data
+        outputAccumulator.append(outputHandle.readDataToEndOfFile())
+        errorAccumulator.append(errorHandle.readDataToEndOfFile())
 
-        let output = String(data: outputData, encoding: .utf8) ?? ""
-        let errorOutput = String(data: errorData, encoding: .utf8) ?? ""
+        let output = String(data: outputAccumulator.getData(), encoding: .utf8) ?? ""
+        let errorOutput = String(data: errorAccumulator.getData(), encoding: .utf8) ?? ""
 
         if process.terminationStatus != 0 && !errorOutput.isEmpty {
+            logger.log("execute: Command failed with status \(process.terminationStatus): \(errorOutput.prefix(200))", category: .ssh)
             throw SSHError.commandFailed(errorOutput)
         }
 
+        logger.log("execute: Success, got \(output.count) bytes", category: .ssh, verbose: true)
         isConnected = true
         return output
     }
@@ -140,12 +195,17 @@ actor SSHService {
         }
 
         // SSH options for non-interactive use
+        // Use ControlMaster to share SSH connections and avoid rate limiting
+        let controlPath = "/tmp/mcpanel-ssh-\(server.host)-\(server.sshUsername)"
         args.append(contentsOf: [
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=10",
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "LogLevel=ERROR"
+            "-o", "LogLevel=ERROR",
+            "-o", "ControlMaster=auto",
+            "-o", "ControlPath=\(controlPath)",
+            "-o", "ControlPersist=60"
         ])
 
         // Port if non-standard
@@ -206,7 +266,7 @@ extension SSHService {
         let newFileName = plugin.isEnabled ? plugin.disabledFileName : plugin.enabledFileName
         let newPath = "\(pluginsPath)/\(newFileName)"
 
-        try await execute("mv '\(currentPath)' '\(newPath)'")
+        _ = try await execute("mv '\(currentPath)' '\(newPath)'")
     }
 
     /// Check if the server is running (via systemd)
@@ -280,8 +340,8 @@ extension SSHService {
             }
         }
 
-        // Now start the server via systemd
-        _ = try await execute("systemctl start '\(unit)'")
+        // Restart via systemd (works whether it's running or already stopped)
+        _ = try await execute("systemctl restart '\(unit)'")
     }
 
     /// Get server status details
@@ -350,7 +410,9 @@ extension SSHService {
     /// Stream the server log
     func streamLog() -> AsyncStream<String> {
         let logPath = "\(server.serverPath)/logs/latest.log"
-        return stream("tail -f '\(logPath)'")
+        // Use -F to follow by name (survives log rotation/recreate on restart)
+        // -n 0 avoids replaying old lines when the stream is started after an initial tail load.
+        return stream("tail -n 0 -F '\(logPath)'")
     }
 
     /// Send a command to the Minecraft server via RCON, screen, or tmux
@@ -410,6 +472,25 @@ extension SSHService {
         throw SSHError.commandFailed("No RCON, screen, or tmux session found. Configure RCON password or screen session in server settings.")
     }
 
+    /// Send a command via RCON and return the response
+    /// This is useful for querying server state without affecting the console
+    func sendRCONCommand(_ command: String, password: String, port: Int = 25575, host: String = "127.0.0.1") async throws -> String {
+        let escapedCommand = command.replacingOccurrences(of: "'", with: "'\\''")
+        let escapedPassword = password.replacingOccurrences(of: "'", with: "'\\''")
+
+        // Check if mcrcon is available
+        let mcrconCheck = try? await execute("which mcrcon || which /usr/local/bin/mcrcon")
+        let mcrconPath = mcrconCheck?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        if mcrconPath.isEmpty {
+            // Try to install mcrcon
+            _ = try? await execute("apt-get install -y mcrcon 2>/dev/null || (cd /tmp && rm -rf mcrcon && git clone https://github.com/Tiiffi/mcrcon.git && cd mcrcon && make && cp mcrcon /usr/local/bin/)")
+        }
+
+        let rconCommand = "mcrcon -H '\(host)' -P \(port) -p '\(escapedPassword)' '\(escapedCommand)' 2>/dev/null"
+        return try await execute(rconCommand)
+    }
+
     /// Upload a file via scp
     func uploadFile(localPath: String, remotePath: String) async throws {
         var args: [String] = []
@@ -453,7 +534,39 @@ extension SSHService {
         }
     }
 
-    /// Download a file via scp
+    /// Read file contents from remote server via SSH cat command
+    func readFile(at remotePath: String) async throws -> Data {
+        let output = try await execute("cat '\(remotePath)'")
+        guard let data = output.data(using: String.Encoding.utf8) else {
+            throw SSHError.commandFailed("Failed to read file data")
+        }
+        return data
+    }
+
+    /// Read file contents quickly with a shorter timeout
+    /// Returns empty string if file doesn't exist (instead of throwing)
+    func readFileQuick(at remotePath: String) async throws -> String {
+        let logger = DebugLogger.shared
+        logger.log("readFileQuick: Reading \(remotePath)", category: .ssh)
+
+        let startTime = Date()
+        do {
+            // Read file directly - cat with redirection to suppress errors if file doesn't exist
+            let output = try await execute("cat '\(remotePath)' 2>/dev/null || echo ''", timeout: 15)
+            let elapsed = Date().timeIntervalSince(startTime)
+            logger.log("readFileQuick: Completed in \(String(format: "%.2f", elapsed))s, got \(output.count) bytes", category: .ssh)
+            return output
+        } catch {
+            let elapsed = Date().timeIntervalSince(startTime)
+            logger.log("readFileQuick: Failed after \(String(format: "%.2f", elapsed))s: \(error)", category: .ssh)
+            // Return empty string for non-timeout errors
+            if case SSHError.timeout = error {
+                throw error
+            }
+            return ""
+        }
+    }
+
     func downloadFile(remotePath: String, localPath: String) async throws {
         var args: [String] = []
 
@@ -494,5 +607,59 @@ extension SSHService {
             let errorOutput = String(data: errorData, encoding: .utf8) ?? "Unknown error"
             throw SSHError.commandFailed(errorOutput)
         }
+    }
+
+    /// Download a directory recursively via scp -r
+    func downloadDirectory(remotePath: String, localPath: String) async throws {
+        var args: [String] = []
+
+        // Add identity file if specified
+        if let identityFile = server.identityFilePath, !identityFile.isEmpty {
+            let expandedPath = NSString(string: identityFile).expandingTildeInPath
+            args.append(contentsOf: ["-i", expandedPath])
+        }
+
+        // SCP options with recursive flag
+        args.append(contentsOf: [
+            "-r",  // Recursive copy
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=10",
+            "-o", "StrictHostKeyChecking=no"
+        ])
+
+        // Port if non-standard
+        if server.sshPort != 22 {
+            args.append(contentsOf: ["-P", String(server.sshPort)])
+        }
+
+        // Source and destination
+        args.append("\(server.sshUsername)@\(server.host):\(remotePath)")
+        args.append(localPath)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/scp")
+        process.arguments = args
+
+        let errorPipe = Pipe()
+        process.standardError = errorPipe
+
+        try process.run()
+        process.waitUntilExit()
+
+        if process.terminationStatus != 0 {
+            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let errorOutput = String(data: errorData, encoding: .utf8) ?? "Unknown error"
+            throw SSHError.commandFailed(errorOutput)
+        }
+    }
+
+    /// Delete a file on the remote server
+    func deleteFile(remotePath: String) async throws {
+        _ = try await execute("rm '\(remotePath)'")
+    }
+
+    /// Delete a directory recursively on the remote server (rm -rf)
+    func deleteDirectory(remotePath: String) async throws {
+        _ = try await execute("rm -rf '\(remotePath)'")
     }
 }
