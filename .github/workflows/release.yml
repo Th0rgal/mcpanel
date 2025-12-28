@@ -32,10 +32,10 @@ jobs:
       - name: Build with Gradle
         run: ./gradlew build
 
-      - name: Get version from build.gradle.kts
+      - name: Get version from gradle.properties
         id: version
         run: |
-          VERSION=$(grep 'val pluginVersion' build.gradle.kts | sed 's/.*"\(.*\)".*/\1/')
+          VERSION=$(grep '^pluginVersion=' gradle.properties | cut -d'=' -f2)
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Upload Bukkit JAR as artifact

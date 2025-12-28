@@ -6,7 +6,7 @@ plugins {
     id("com.gradleup.shadow") version "8.3.5"
 }
 
-val pluginVersion = "1.0.1"
+val pluginVersion: String by project
 
 group = "dev.th0rgal.mcpanel"
 version = pluginVersion
