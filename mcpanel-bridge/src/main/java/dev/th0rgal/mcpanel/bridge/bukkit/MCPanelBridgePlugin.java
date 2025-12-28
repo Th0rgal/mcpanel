@@ -886,6 +886,20 @@ public class MCPanelBridgePlugin extends JavaPlugin implements Listener {
             );
         };
 
+        // Avoid blocking the main thread (console command) which would deadlock Spigot completions.
+        if (Bukkit.isPrimaryThread()) {
+            future.orTimeout(5, TimeUnit.SECONDS)
+                    .whenComplete((response, error) -> {
+                        MCPanelResponse payload = response;
+                        if (payload == null) {
+                            payload = MCPanelResponse.error(request.getId(), safeErrorMessage(error));
+                        }
+                        String encoded = encodeRCONResponse(payload);
+                        Bukkit.getScheduler().runTask(this, () -> sender.sendMessage(encoded));
+                    });
+            return;
+        }
+
         try {
             // Block and wait for the response (with 5 second timeout)
             // This ensures RCON gets the response before the connection closes
@@ -895,8 +909,20 @@ public class MCPanelBridgePlugin extends JavaPlugin implements Listener {
         } catch (TimeoutException e) {
             sender.sendMessage(encodeRCONResponse(MCPanelResponse.error(request.getId(), "Request timed out")));
         } catch (Exception e) {
-            sender.sendMessage(encodeRCONResponse(MCPanelResponse.error(request.getId(), e.getMessage())));
+            sender.sendMessage(encodeRCONResponse(MCPanelResponse.error(request.getId(), safeErrorMessage(e))));
         }
+    }
+
+    private String safeErrorMessage(Throwable error) {
+        if (error == null) return "Unknown error";
+        if (error instanceof java.util.concurrent.CompletionException ce && ce.getCause() != null) {
+            error = ce.getCause();
+        }
+        String message = error.getMessage();
+        if (message == null || message.isBlank()) {
+            return error.getClass().getSimpleName();
+        }
+        return message;
     }
 
     /**

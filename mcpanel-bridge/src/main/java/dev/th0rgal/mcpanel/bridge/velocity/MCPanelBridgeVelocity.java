@@ -32,13 +32,13 @@ import java.util.stream.Collectors;
 @Plugin(
         id = "mcpanel-bridge",
         name = "MCPanel Bridge",
-        version = "1.0.0",
+        version = "1.0.1",
         description = "Bridge plugin for MCPanel - Real-time console communication",
         authors = {"Th0rgal"}
 )
 public class MCPanelBridgeVelocity {
 
-    private static final String VERSION = "1.0.0";
+    private static final String VERSION = "1.0.1";
 
     private final ProxyServer server;
     private final Logger logger;

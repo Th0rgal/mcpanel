@@ -21,10 +21,10 @@ if [[ "$1" == "--release" ]]; then
     BUILD_CONFIG="release"
     BUILD_DIR=".build/release"
     echo "🖥️  Building $APP_NAME in release mode (optimized)..."
-    swift build -c release 2>&1 | grep -v "found 1 file(s) which are unhandled"
+    swift build -c release 2>&1 | { grep -v "found 1 file(s) which are unhandled" || true; }
 else
     echo "🖥️  Building $APP_NAME in debug mode (fast)..."
-    swift build 2>&1 | grep -v "found 1 file(s) which are unhandled"
+    swift build 2>&1 | { grep -v "found 1 file(s) which are unhandled" || true; }
 fi
 
 echo "📦 Creating app bundle..."
