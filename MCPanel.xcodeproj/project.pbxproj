@@ -1,0 +1,485 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		02BD68F2DFD8DC00659644A3 /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA235DB2F72F473B056E093 /* SidebarView.swift */; };
+		057CDE99274D2C2021DC3047 /* FileBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFB3F75DB913477CD55D551A /* FileBrowserView.swift */; };
+		0BD349D1CBB25FED6D6AF1E2 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07E23A41816FB78B9F8E32B2 /* OnboardingView.swift */; };
+		14D97865F7D52960502559AE /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC7E4E6E97C4FAAC088AA1BC /* ContentView.swift */; };
+		16285701A189FF64F1EEAE4D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1E425D51F281FC3C320A8251 /* Assets.xcassets */; };
+		1A9EB7193000FD7DD5FEF222 /* CommandDebugPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEA3D631611E8A84E911FDE1 /* CommandDebugPanel.swift */; };
+		21EBDEDD54332E17B64D1E61 /* SwiftTerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AB9E95712C0ED34D30377E0 /* SwiftTerminalView.swift */; };
+		4598D88D7EBC8023F929F1B4 /* Server.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2578340D233B71D77E8D79EE /* Server.swift */; };
+		5CA43D43101E926AAEC14417 /* GlassBackground.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77B77641EE98946C58B15329 /* GlassBackground.swift */; };
+		6BC2E9291D9B448174AAFA07 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 00A8377854F4256AE79B53E3 /* SwiftTerm */; };
+		6ED714F318E1ED0E6AA41752 /* WindowStateObserver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6DA3C390029F86E3057C257 /* WindowStateObserver.swift */; };
+		77A0EC01F0642955AC60A30F /* FileItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = A43254A832A2EC9BED398E03 /* FileItem.swift */; };
+		7DC8941861A3ECE1EA5152AE /* MCPanelApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C3F19B952CAC55FD6CD54E2 /* MCPanelApp.swift */; };
+		7F9D5D667113F387376DD5F0 /* PersistenceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D0BBA060F926AEF7FC80F02 /* PersistenceService.swift */; };
+		8CC3763F4867F8BEBBA4BCA2 /* Plugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DABBEAF9EF94A93FAC2F1B9 /* Plugin.swift */; };
+		92F51E4F48676A850B405269 /* ConsoleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44E77BADF7BBB7E1906C6401 /* ConsoleView.swift */; };
+		93BDA17A0BBA491E3895FA9F /* PTYService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 859BD2BCEEEECDEF836CAF2E /* PTYService.swift */; };
+		A2502CE80FC86FEB105E1166 /* DebugLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE7E1413C37199BDECBED7C7 /* DebugLogger.swift */; };
+		A36F052E520F91CC5D487FF6 /* CommandInputBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7BFF4421FDDCD4402B0494B /* CommandInputBar.swift */; };
+		AE587307EA3A313DD9E0E6F9 /* MCPanelBridgeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55C96F7A9CFED94C5957F6E0 /* MCPanelBridgeService.swift */; };
+		B06BBE53A58941E971825C6C /* MCPanelBridgeProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67B86C93C9BC9FC7FEDC677F /* MCPanelBridgeProtocol.swift */; };
+		CBDA2EA0C38704143E7EEECA /* ServerDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB7CEEB2010E5E21115F72FC /* ServerDetailView.swift */; };
+		CC252D43AED80BED98734CBF /* PluginsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 945B177735CF05FD3FD7EBA6 /* PluginsView.swift */; };
+		D02532A3F5C5730B9084A884 /* ServerManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 504E52689EF3CD22C07E7DAF /* ServerManager.swift */; };
+		D8BAEA851729BDBAF06DCD52 /* PerformanceAlertService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EA5AE559D2E1AA8CD725537 /* PerformanceAlertService.swift */; };
+		DD477F7E671A716D53E4848C /* ConsoleMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 095D675237267A09B7AF57D3 /* ConsoleMessage.swift */; };
+		EA6865796B865956BE1FF23D /* ServerPropertiesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9A77C417C605068DE43EC3F /* ServerPropertiesView.swift */; };
+		ED651AE016FC1AF3B3E22927 /* SSHService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18D7C4F92CD35E4D8F6BA92D /* SSHService.swift */; };
+		F039E9A447AF58955952BDBE /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D223440980A1967F749AFF91 /* DashboardView.swift */; };
+		FAFC51320B98121108B3429D /* ANSIParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE56DE3EBADA9185D7DD9238 /* ANSIParser.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		07E23A41816FB78B9F8E32B2 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
+		095D675237267A09B7AF57D3 /* ConsoleMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConsoleMessage.swift; sourceTree = "<group>"; };
+		0D0BBA060F926AEF7FC80F02 /* PersistenceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceService.swift; sourceTree = "<group>"; };
+		18D7C4F92CD35E4D8F6BA92D /* SSHService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHService.swift; sourceTree = "<group>"; };
+		1A249D957493E5733AA7C51F /* MCPanel.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MCPanel.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		1E425D51F281FC3C320A8251 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		2578340D233B71D77E8D79EE /* Server.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Server.swift; sourceTree = "<group>"; };
+		3EA5AE559D2E1AA8CD725537 /* PerformanceAlertService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerformanceAlertService.swift; sourceTree = "<group>"; };
+		44E77BADF7BBB7E1906C6401 /* ConsoleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConsoleView.swift; sourceTree = "<group>"; };
+		4AB9E95712C0ED34D30377E0 /* SwiftTerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftTerminalView.swift; sourceTree = "<group>"; };
+		504E52689EF3CD22C07E7DAF /* ServerManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerManager.swift; sourceTree = "<group>"; };
+		55C96F7A9CFED94C5957F6E0 /* MCPanelBridgeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPanelBridgeService.swift; sourceTree = "<group>"; };
+		5DABBEAF9EF94A93FAC2F1B9 /* Plugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Plugin.swift; sourceTree = "<group>"; };
+		67B86C93C9BC9FC7FEDC677F /* MCPanelBridgeProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPanelBridgeProtocol.swift; sourceTree = "<group>"; };
+		77B77641EE98946C58B15329 /* GlassBackground.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassBackground.swift; sourceTree = "<group>"; };
+		81552EBFA77CC6B44D4DE63C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		859BD2BCEEEECDEF836CAF2E /* PTYService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PTYService.swift; sourceTree = "<group>"; };
+		945B177735CF05FD3FD7EBA6 /* PluginsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginsView.swift; sourceTree = "<group>"; };
+		9C3F19B952CAC55FD6CD54E2 /* MCPanelApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPanelApp.swift; sourceTree = "<group>"; };
+		A43254A832A2EC9BED398E03 /* FileItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileItem.swift; sourceTree = "<group>"; };
+		AFB3F75DB913477CD55D551A /* FileBrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileBrowserView.swift; sourceTree = "<group>"; };
+		BCA235DB2F72F473B056E093 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
+		C6DA3C390029F86E3057C257 /* WindowStateObserver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowStateObserver.swift; sourceTree = "<group>"; };
+		C7BFF4421FDDCD4402B0494B /* CommandInputBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandInputBar.swift; sourceTree = "<group>"; };
+		CE56DE3EBADA9185D7DD9238 /* ANSIParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ANSIParser.swift; sourceTree = "<group>"; };
+		D223440980A1967F749AFF91 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
+		DC7E4E6E97C4FAAC088AA1BC /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		DEA3D631611E8A84E911FDE1 /* CommandDebugPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandDebugPanel.swift; sourceTree = "<group>"; };
+		E9A77C417C605068DE43EC3F /* ServerPropertiesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerPropertiesView.swift; sourceTree = "<group>"; };
+		EE7E1413C37199BDECBED7C7 /* DebugLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugLogger.swift; sourceTree = "<group>"; };
+		F6680F75CFFD52522733F1F4 /* MCPanel.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MCPanel.entitlements; sourceTree = "<group>"; };
+		FB7CEEB2010E5E21115F72FC /* ServerDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerDetailView.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		08608B404549BB0B0A54DD84 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6BC2E9291D9B448174AAFA07 /* SwiftTerm in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		1AB8F72E0523EF0D0754C4F8 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				1A249D957493E5733AA7C51F /* MCPanel.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		3B5AF788AE1BAAC409592452 /* mcpanel */ = {
+			isa = PBXGroup;
+			children = (
+				59B6B4B73093E70D6E0D171B /* Models */,
+				70148F24B1700FE2DA39FEFC /* Services */,
+				BAF79266045E9BB4139B050C /* Views */,
+				1E425D51F281FC3C320A8251 /* Assets.xcassets */,
+				81552EBFA77CC6B44D4DE63C /* Info.plist */,
+				F6680F75CFFD52522733F1F4 /* MCPanel.entitlements */,
+				9C3F19B952CAC55FD6CD54E2 /* MCPanelApp.swift */,
+			);
+			path = mcpanel;
+			sourceTree = "<group>";
+		};
+		59B6B4B73093E70D6E0D171B /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				095D675237267A09B7AF57D3 /* ConsoleMessage.swift */,
+				A43254A832A2EC9BED398E03 /* FileItem.swift */,
+				5DABBEAF9EF94A93FAC2F1B9 /* Plugin.swift */,
+				2578340D233B71D77E8D79EE /* Server.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		70148F24B1700FE2DA39FEFC /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				CE56DE3EBADA9185D7DD9238 /* ANSIParser.swift */,
+				EE7E1413C37199BDECBED7C7 /* DebugLogger.swift */,
+				67B86C93C9BC9FC7FEDC677F /* MCPanelBridgeProtocol.swift */,
+				55C96F7A9CFED94C5957F6E0 /* MCPanelBridgeService.swift */,
+				3EA5AE559D2E1AA8CD725537 /* PerformanceAlertService.swift */,
+				0D0BBA060F926AEF7FC80F02 /* PersistenceService.swift */,
+				859BD2BCEEEECDEF836CAF2E /* PTYService.swift */,
+				504E52689EF3CD22C07E7DAF /* ServerManager.swift */,
+				18D7C4F92CD35E4D8F6BA92D /* SSHService.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		8651F7CFEFF92AB28D5E50E8 = {
+			isa = PBXGroup;
+			children = (
+				3B5AF788AE1BAAC409592452 /* mcpanel */,
+				1AB8F72E0523EF0D0754C4F8 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		BAF79266045E9BB4139B050C /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				DC12481914C8B0A8F92873B1 /* Components */,
+				44E77BADF7BBB7E1906C6401 /* ConsoleView.swift */,
+				DC7E4E6E97C4FAAC088AA1BC /* ContentView.swift */,
+				D223440980A1967F749AFF91 /* DashboardView.swift */,
+				AFB3F75DB913477CD55D551A /* FileBrowserView.swift */,
+				07E23A41816FB78B9F8E32B2 /* OnboardingView.swift */,
+				945B177735CF05FD3FD7EBA6 /* PluginsView.swift */,
+				FB7CEEB2010E5E21115F72FC /* ServerDetailView.swift */,
+				E9A77C417C605068DE43EC3F /* ServerPropertiesView.swift */,
+				BCA235DB2F72F473B056E093 /* SidebarView.swift */,
+				4AB9E95712C0ED34D30377E0 /* SwiftTerminalView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		DC12481914C8B0A8F92873B1 /* Components */ = {
+			isa = PBXGroup;
+			children = (
+				DEA3D631611E8A84E911FDE1 /* CommandDebugPanel.swift */,
+				C7BFF4421FDDCD4402B0494B /* CommandInputBar.swift */,
+				77B77641EE98946C58B15329 /* GlassBackground.swift */,
+				C6DA3C390029F86E3057C257 /* WindowStateObserver.swift */,
+			);
+			path = Components;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		FBB112E638BB5CB2B352CFD8 /* MCPanel */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5A6CD96C8D69FFE16BB2BD3E /* Build configuration list for PBXNativeTarget "MCPanel" */;
+			buildPhases = (
+				0B868A3B95F4B5A65CD10518 /* Sources */,
+				AF20575D29C7167B235E90C2 /* Resources */,
+				08608B404549BB0B0A54DD84 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MCPanel;
+			packageProductDependencies = (
+				00A8377854F4256AE79B53E3 /* SwiftTerm */,
+			);
+			productName = MCPanel;
+			productReference = 1A249D957493E5733AA7C51F /* MCPanel.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		846CF7B80AFCE712B6BB34D2 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					FBB112E638BB5CB2B352CFD8 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = C32450BA096F5EE8BEF777C5 /* Build configuration list for PBXProject "MCPanel" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 8651F7CFEFF92AB28D5E50E8;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				708819A1ACF22977FDBCB063 /* XCRemoteSwiftPackageReference "SwiftTerm" */,
+			);
+			preferredProjectObjectVersion = 77;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				FBB112E638BB5CB2B352CFD8 /* MCPanel */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		AF20575D29C7167B235E90C2 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				16285701A189FF64F1EEAE4D /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		0B868A3B95F4B5A65CD10518 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				FAFC51320B98121108B3429D /* ANSIParser.swift in Sources */,
+				1A9EB7193000FD7DD5FEF222 /* CommandDebugPanel.swift in Sources */,
+				A36F052E520F91CC5D487FF6 /* CommandInputBar.swift in Sources */,
+				DD477F7E671A716D53E4848C /* ConsoleMessage.swift in Sources */,
+				92F51E4F48676A850B405269 /* ConsoleView.swift in Sources */,
+				14D97865F7D52960502559AE /* ContentView.swift in Sources */,
+				F039E9A447AF58955952BDBE /* DashboardView.swift in Sources */,
+				A2502CE80FC86FEB105E1166 /* DebugLogger.swift in Sources */,
+				057CDE99274D2C2021DC3047 /* FileBrowserView.swift in Sources */,
+				77A0EC01F0642955AC60A30F /* FileItem.swift in Sources */,
+				5CA43D43101E926AAEC14417 /* GlassBackground.swift in Sources */,
+				7DC8941861A3ECE1EA5152AE /* MCPanelApp.swift in Sources */,
+				B06BBE53A58941E971825C6C /* MCPanelBridgeProtocol.swift in Sources */,
+				AE587307EA3A313DD9E0E6F9 /* MCPanelBridgeService.swift in Sources */,
+				0BD349D1CBB25FED6D6AF1E2 /* OnboardingView.swift in Sources */,
+				93BDA17A0BBA491E3895FA9F /* PTYService.swift in Sources */,
+				D8BAEA851729BDBAF06DCD52 /* PerformanceAlertService.swift in Sources */,
+				7F9D5D667113F387376DD5F0 /* PersistenceService.swift in Sources */,
+				8CC3763F4867F8BEBBA4BCA2 /* Plugin.swift in Sources */,
+				CC252D43AED80BED98734CBF /* PluginsView.swift in Sources */,
+				ED651AE016FC1AF3B3E22927 /* SSHService.swift in Sources */,
+				4598D88D7EBC8023F929F1B4 /* Server.swift in Sources */,
+				CBDA2EA0C38704143E7EEECA /* ServerDetailView.swift in Sources */,
+				D02532A3F5C5730B9084A884 /* ServerManager.swift in Sources */,
+				EA6865796B865956BE1FF23D /* ServerPropertiesView.swift in Sources */,
+				02BD68F2DFD8DC00659644A3 /* SidebarView.swift in Sources */,
+				21EBDEDD54332E17B64D1E61 /* SwiftTerminalView.swift in Sources */,
+				6ED714F318E1ED0E6AA41752 /* WindowStateObserver.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		15B576E8372F2D7299848C38 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = mcpanel/MCPanel.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = mcpanel/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
+				PRODUCT_BUNDLE_IDENTIFIER = md.thomas.mcpanel;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		2F2A624C2050E670CEB119CE /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = mcpanel/MCPanel.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = mcpanel/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
+				PRODUCT_BUNDLE_IDENTIFIER = md.thomas.mcpanel;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		5127B34542C3BF0FFCE93B12 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = MCPanel;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.9;
+			};
+			name = Release;
+		};
+		75EBFD5385D74764929C60E2 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = MCPanel;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.9;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		5A6CD96C8D69FFE16BB2BD3E /* Build configuration list for PBXNativeTarget "MCPanel" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2F2A624C2050E670CEB119CE /* Debug */,
+				15B576E8372F2D7299848C38 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		C32450BA096F5EE8BEF777C5 /* Build configuration list for PBXProject "MCPanel" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				75EBFD5385D74764929C60E2 /* Debug */,
+				5127B34542C3BF0FFCE93B12 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		708819A1ACF22977FDBCB063 /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/migueldeicaza/SwiftTerm.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.2.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		00A8377854F4256AE79B53E3 /* SwiftTerm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 708819A1ACF22977FDBCB063 /* XCRemoteSwiftPackageReference "SwiftTerm" */;
+			productName = SwiftTerm;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 846CF7B80AFCE712B6BB34D2 /* Project object */;
+}
