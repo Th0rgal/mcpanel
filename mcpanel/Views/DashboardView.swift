@@ -857,6 +857,25 @@ struct PerformanceChartView: View {
         }
     }
 
+    private struct TimelineSeriesPoint: Identifiable {
+        let id = UUID()
+        let time: Date
+        let value: Double
+        let series: String
+        let color: Color
+        let lineWidth: Double
+    }
+
+    private func coreColor(_ index: Int, total: Int) -> Color {
+        let count = max(total, 1)
+        let hue = 0.52 + (Double(index) / Double(count)) * 0.18
+        return Color(hue: hue, saturation: 0.65, brightness: 0.9)
+    }
+
+    private func normalizedTps(_ value: Double) -> Double {
+        min(max((value / 20.0) * 100.0, 0), 100)
+    }
+
     var body: some View {
         VStack(spacing: 12) {
             // Time range selector
@@ -882,35 +901,122 @@ struct PerformanceChartView: View {
             }
 
             // Chart
-            let tpsData = Array(history.tpsHistory.suffix(selectedTimeRange.sampleCount))
-            // Note: msptData could be added as a second line series in the future
-            // let msptData = Array(history.msptHistory.suffix(selectedTimeRange.sampleCount))
+            let sampleCount = selectedTimeRange.sampleCount
+            let tpsData = Array(history.tpsHistory.suffix(sampleCount))
+            let memoryData = Array(history.memoryHistory.suffix(sampleCount))
+            let cpuData = Array(history.cpuHistory.suffix(sampleCount))
+            let systemCpuData = Array(history.systemCpuHistory.suffix(sampleCount))
+            let perCoreData = history.perCoreCpuHistory.map { Array($0.suffix(sampleCount)) }
+            let rxData = Array(history.networkRxHistory.suffix(sampleCount))
+            let txData = Array(history.networkTxHistory.suffix(sampleCount))
 
-            if !tpsData.isEmpty {
-                Chart {
-                    // TPS line
-                    ForEach(Array(tpsData.enumerated()), id: \.element.id) { index, point in
-                        LineMark(
-                            x: .value("Time", index),
-                            y: .value("TPS", point.value),
-                            series: .value("Metric", "TPS")
-                        )
-                        .foregroundStyle(Color(hex: "22C55E"))
-                        .lineStyle(StrokeStyle(lineWidth: 2))
+            let maxBandwidth = max(rxData.map { $0.value }.max() ?? 0, txData.map { $0.value }.max() ?? 0)
+            let normalizeBandwidth: (Double) -> Double = { value in
+                guard maxBandwidth > 0 else { return 0 }
+                return min(max(value / maxBandwidth * 100.0, 0), 100)
+            }
+
+            var seriesPoints: [TimelineSeriesPoint] = []
+
+            // TPS (scaled to 0-100)
+            for point in tpsData {
+                seriesPoints.append(TimelineSeriesPoint(
+                    time: point.timestamp,
+                    value: normalizedTps(point.value),
+                    series: "TPS",
+                    color: Color(hex: "22C55E"),
+                    lineWidth: 2
+                ))
+            }
+
+            // RAM usage (already %)
+            for point in memoryData {
+                seriesPoints.append(TimelineSeriesPoint(
+                    time: point.timestamp,
+                    value: min(max(point.value, 0), 100),
+                    series: "RAM",
+                    color: Color(hex: "A855F7"),
+                    lineWidth: 2
+                ))
+            }
+
+            // CPU per core if available, otherwise aggregate CPU
+            if !perCoreData.isEmpty {
+                for (index, coreSeries) in perCoreData.enumerated() {
+                    let color = coreColor(index, total: perCoreData.count)
+                    for point in coreSeries {
+                        seriesPoints.append(TimelineSeriesPoint(
+                            time: point.timestamp,
+                            value: min(max(point.value, 0), 100),
+                            series: "CPU \(index + 1)",
+                            color: color.opacity(0.8),
+                            lineWidth: 1.2
+                        ))
                     }
-
-                    // Target TPS line at 20
-                    RuleMark(y: .value("Target", 20))
-                        .foregroundStyle(Color.white.opacity(0.2))
-                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [5, 5]))
                 }
-                .chartYScale(domain: 0...25)
+            } else if !cpuData.isEmpty {
+                for point in cpuData {
+                    seriesPoints.append(TimelineSeriesPoint(
+                        time: point.timestamp,
+                        value: min(max(point.value, 0), 100),
+                        series: "CPU",
+                        color: Color(hex: "3B82F6"),
+                        lineWidth: 1.6
+                    ))
+                }
+            } else if !systemCpuData.isEmpty {
+                for point in systemCpuData {
+                    seriesPoints.append(TimelineSeriesPoint(
+                        time: point.timestamp,
+                        value: min(max(point.value, 0), 100),
+                        series: "CPU (SYS)",
+                        color: Color(hex: "3B82F6").opacity(0.9),
+                        lineWidth: 1.6
+                    ))
+                }
+            }
+
+            // Bandwidth (normalized to peak in range)
+            for point in rxData {
+                seriesPoints.append(TimelineSeriesPoint(
+                    time: point.timestamp,
+                    value: normalizeBandwidth(point.value),
+                    series: "Net RX",
+                    color: Color(hex: "22D3EE"),
+                    lineWidth: 1.4
+                ))
+            }
+
+            for point in txData {
+                seriesPoints.append(TimelineSeriesPoint(
+                    time: point.timestamp,
+                    value: normalizeBandwidth(point.value),
+                    series: "Net TX",
+                    color: Color(hex: "0EA5E9"),
+                    lineWidth: 1.4
+                ))
+            }
+
+            if !seriesPoints.isEmpty {
+                Chart {
+                    ForEach(seriesPoints) { point in
+                        LineMark(
+                            x: .value("Time", point.time),
+                            y: .value("Value", point.value),
+                            series: .value("Metric", point.series)
+                        )
+                        .foregroundStyle(point.color)
+                        .lineStyle(StrokeStyle(lineWidth: point.lineWidth))
+                        .interpolationMethod(.catmullRom)
+                    }
+                }
+                .chartYScale(domain: 0...100)
                 .chartXAxis(.hidden)
                 .chartYAxis {
-                    AxisMarks(position: .leading) { value in
+                    AxisMarks(position: .leading, values: [0, 25, 50, 75, 100]) { value in
                         AxisValueLabel {
-                            if let tps = value.as(Double.self) {
-                                Text("\(Int(tps))")
+                            if let percent = value.as(Double.self) {
+                                Text("\(Int(percent))%")
                                     .font(.system(size: 10))
                                     .foregroundColor(.white.opacity(0.5))
                             }
@@ -919,7 +1025,11 @@ struct PerformanceChartView: View {
                             .foregroundStyle(Color.white.opacity(0.1))
                     }
                 }
-                .chartLegend(.hidden)
+                .chartLegend(position: .bottom, alignment: .leading)
+
+                Text("All series normalized to % (TPS scaled to 0–100; bandwidth scaled to peak in range).")
+                    .font(.system(size: 10))
+                    .foregroundColor(.white.opacity(0.4))
             }
         }
     }

@@ -28,6 +28,7 @@ class PerformanceHistory: ObservableObject {
     @Published var cpuHistory: [DataPoint] = []
     @Published var systemCpuHistory: [DataPoint] = []
     @Published var threadCountHistory: [DataPoint] = []
+    @Published var perCoreCpuHistory: [[DataPoint]] = []
 
     /// Network I/O history (rates in bytes/sec)
     @Published var networkRxHistory: [DataPoint] = []
@@ -67,6 +68,14 @@ class PerformanceHistory: ObservableObject {
         }
         if let sysCpu = status.systemCpuPercent {
             systemCpuHistory.append(DataPoint(timestamp: now, value: sysCpu))
+        }
+        if let perCore = status.perCoreCpu, !perCore.isEmpty {
+            if perCoreCpuHistory.count != perCore.count {
+                perCoreCpuHistory = Array(repeating: [], count: perCore.count)
+            }
+            for (index, value) in perCore.enumerated() where index < perCoreCpuHistory.count {
+                perCoreCpuHistory[index].append(DataPoint(timestamp: now, value: value))
+            }
         }
         if let threads = status.threadCount {
             threadCountHistory.append(DataPoint(timestamp: now, value: Double(threads)))
@@ -112,6 +121,13 @@ class PerformanceHistory: ObservableObject {
         }
         if systemCpuHistory.count > maxRecentSamples {
             systemCpuHistory.removeFirst(systemCpuHistory.count - maxRecentSamples)
+        }
+        if !perCoreCpuHistory.isEmpty {
+            for index in perCoreCpuHistory.indices {
+                if perCoreCpuHistory[index].count > maxRecentSamples {
+                    perCoreCpuHistory[index].removeFirst(perCoreCpuHistory[index].count - maxRecentSamples)
+                }
+            }
         }
         if threadCountHistory.count > maxRecentSamples {
             threadCountHistory.removeFirst(threadCountHistory.count - maxRecentSamples)
@@ -162,6 +178,7 @@ class PerformanceHistory: ObservableObject {
         playerCountHistory = []
         cpuHistory = []
         systemCpuHistory = []
+        perCoreCpuHistory = []
         threadCountHistory = []
         networkRxHistory = []
         networkTxHistory = []

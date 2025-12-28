@@ -82,6 +82,7 @@ public class MCPanelBridgePlugin extends JavaPlugin implements Listener {
     // CPU usage fallback tracking (process CPU time deltas)
     private long lastProcessCpuTimeNs = -1;
     private long lastProcessCpuSampleTimeNs = -1;
+    private List<CpuTimes> lastPerCoreCpuTimes = null;
 
     // Debug logging toggle (config.yml)
     private boolean debugLogging = false;
@@ -375,25 +376,85 @@ public class MCPanelBridgePlugin extends JavaPlugin implements Listener {
         return computed;
     }
 
+    private static class CpuTimes {
+        final long total;
+        final long idle;
+
+        CpuTimes(long total, long idle) {
+            this.total = total;
+            this.idle = idle;
+        }
+    }
+
+    private long parseStatValue(@NotNull String value) {
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
     /**
      * Collect per-core CPU usage from /proc/stat (Linux only).
      * Returns null if not available (non-Linux or error).
      */
     private List<Double> collectPerCoreCpuUsage() {
-        // This is a simplified implementation - for accurate per-core usage
-        // we'd need to track deltas between /proc/stat readings.
-        // For now, return null and rely on aggregate CPU from JMX.
-        // A full implementation would require storing previous cpu times.
         try {
             java.io.File procStat = new java.io.File("/proc/stat");
             if (!procStat.exists()) return null;
 
-            // For a proper implementation, we'd need to:
-            // 1. Read cpu0, cpu1, etc lines from /proc/stat
-            // 2. Compare with previous readings to calculate usage %
-            // This requires maintaining state between calls
-            // For now, return null and let the UI fall back to aggregate
-            return null;
+            List<CpuTimes> current = new ArrayList<>();
+
+            try (java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.FileReader(procStat))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (!line.startsWith("cpu")) continue;
+                    if (line.startsWith("cpu ")) continue; // Skip aggregate line
+
+                    String[] parts = line.trim().split("\\s+");
+                    if (parts.length < 5) continue;
+
+                    long user = parseStatValue(parts[1]);
+                    long nice = parseStatValue(parts[2]);
+                    long system = parseStatValue(parts[3]);
+                    long idle = parseStatValue(parts[4]);
+                    long iowait = parts.length > 5 ? parseStatValue(parts[5]) : 0;
+                    long irq = parts.length > 6 ? parseStatValue(parts[6]) : 0;
+                    long softirq = parts.length > 7 ? parseStatValue(parts[7]) : 0;
+                    long steal = parts.length > 8 ? parseStatValue(parts[8]) : 0;
+                    long guest = parts.length > 9 ? parseStatValue(parts[9]) : 0;
+                    long guestNice = parts.length > 10 ? parseStatValue(parts[10]) : 0;
+
+                    long total = user + nice + system + idle + iowait + irq + softirq + steal + guest + guestNice;
+                    long idleAll = idle + iowait;
+
+                    current.add(new CpuTimes(total, idleAll));
+                }
+            }
+
+            if (current.isEmpty()) return null;
+            if (lastPerCoreCpuTimes == null || lastPerCoreCpuTimes.size() != current.size()) {
+                lastPerCoreCpuTimes = current;
+                return null;
+            }
+
+            List<Double> usage = new ArrayList<>();
+            for (int i = 0; i < current.size(); i++) {
+                CpuTimes prev = lastPerCoreCpuTimes.get(i);
+                CpuTimes now = current.get(i);
+                long deltaTotal = now.total - prev.total;
+                long deltaIdle = now.idle - prev.idle;
+                double percent = 0;
+                if (deltaTotal > 0) {
+                    percent = ((double) (deltaTotal - deltaIdle) / (double) deltaTotal) * 100.0;
+                }
+                if (Double.isNaN(percent)) percent = 0;
+                percent = Math.max(0, Math.min(100, percent));
+                usage.add(percent);
+            }
+
+            lastPerCoreCpuTimes = current;
+            return usage;
         } catch (Exception e) {
             return null;
         }
