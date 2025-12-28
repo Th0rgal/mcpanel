@@ -21,7 +21,7 @@
 </p>
 
 <p align="center">
-  <b>Monitor</b> — Real-time TPS, memory, storage, network stats, and performance timeline
+  <b>Monitor</b> - Real-time TPS, memory, storage, network stats, and performance timeline
 </p>
 
 <br>
@@ -31,7 +31,7 @@
 </p>
 
 <p align="center">
-  <b>Console</b> — Live console with full truecolor ANSI support and command autocomplete
+  <b>Console</b> - Live console with full truecolor ANSI support and command autocomplete
 </p>
 
 <br>
@@ -40,21 +40,21 @@
   <tr>
     <td width="50%">
       <img src="screenshots/plugins.webp" alt="Plugin Manager" width="100%">
-      <p align="center"><b>Plugins</b> — One-click enable/disable</p>
+      <p align="center"><b>Plugins</b> - One-click enable/disable</p>
     </td>
     <td width="50%">
       <img src="screenshots/files.webp" alt="File Browser" width="100%">
-      <p align="center"><b>Files</b> — Native file browser</p>
+      <p align="center"><b>Files</b> - Native file browser</p>
     </td>
   </tr>
   <tr>
     <td width="50%">
       <img src="screenshots/properties.webp" alt="Properties Editor" width="100%">
-      <p align="center"><b>Properties</b> — Visual config editor</p>
+      <p align="center"><b>Properties</b> - Visual config editor</p>
     </td>
     <td width="50%">
       <img src="screenshots/settings.webp" alt="Server Settings" width="100%">
-      <p align="center"><b>Settings</b> — Connection configuration</p>
+      <p align="center"><b>Settings</b> - Connection configuration</p>
     </td>
   </tr>
 </table>
