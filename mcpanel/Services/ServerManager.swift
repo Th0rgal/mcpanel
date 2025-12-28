@@ -458,7 +458,7 @@ class ServerManager: ObservableObject {
         guard serverRestarting[serverId] != true else { return }
         guard mcwrapReattachTasks[serverId] == nil else { return }
 
-        mcwrapReattachTasks[serverId] = Task { [weak self] @MainActor in
+        mcwrapReattachTasks[serverId] = Task { @MainActor [weak self] in
             guard let self else { return }
             defer { self.mcwrapReattachTasks.removeValue(forKey: serverId) }
 

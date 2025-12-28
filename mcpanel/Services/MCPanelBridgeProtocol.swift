@@ -176,8 +176,55 @@ struct StatusUpdatePayload: Codable {
     // CPU and thread metrics (may be nil if unavailable on server JVM)
     let cpuUsagePercent: Double?
     let systemCpuPercent: Double?
+    let perCoreCpu: [Double]?       // Per-core CPU usage (0-100 each)
     let threadCount: Int?
     let peakThreadCount: Int?
+    // Disk and network metrics
+    let disks: [DiskInfo]?
+    let network: NetworkInfo?
+}
+
+// MARK: - Disk Info (gotop-style disk usage)
+
+struct DiskInfo: Codable {
+    let mount: String           // Mount point (e.g., "/", "/home")
+    let device: String          // Device name (e.g., "sda1", "nvme0n1p1")
+    let usedBytes: Int64        // Used space in bytes
+    let totalBytes: Int64       // Total space in bytes
+    let usagePercent: Double    // Usage percentage 0-100
+}
+
+// MARK: - Network Info (gotop-style network I/O)
+
+struct NetworkInfo: Codable {
+    let rxBytes: Int64          // Total bytes received since boot
+    let txBytes: Int64          // Total bytes transmitted since boot
+    let rxBytesPerSec: Int64    // Current receive rate (bytes/sec)
+    let txBytesPerSec: Int64    // Current transmit rate (bytes/sec)
+}
+
+// MARK: - System Info Payload (static hardware/software details)
+
+struct SystemInfoPayload: Codable {
+    // JVM info
+    let javaVersion: String         // e.g., "21.0.1"
+    let javaVendor: String          // e.g., "Eclipse Adoptium"
+    let jvmName: String             // e.g., "OpenJDK 64-Bit Server VM"
+    // Server info
+    let serverVersion: String       // e.g., "Paper 1.21.4-123"
+    let bukkitVersion: String       // e.g., "1.21.4-R0.1-SNAPSHOT"
+    let minecraftVersion: String    // e.g., "1.21.4"
+    // OS info
+    let osName: String              // e.g., "Linux"
+    let osVersion: String           // e.g., "5.15.0-generic"
+    let osArch: String              // e.g., "amd64"
+    // Hardware info
+    let cpuModel: String            // e.g., "AMD Ryzen 9 5900X 12-Core Processor"
+    let cpuCores: Int               // Logical processor count
+    let cpuPhysicalCores: Int       // Physical core count
+    let totalMemoryMB: Int64        // Total system RAM in MB
+    // Network interfaces
+    let networkInterfaces: [String]
 }
 
 // MARK: - Players Update Payload (periodic player list broadcast)

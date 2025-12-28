@@ -163,6 +163,9 @@ struct DashboardView: View {
                     if let status = status {
                         PlayerCountBadge(count: status.playerCount, max: status.maxPlayers)
                     }
+
+                    // System info badge (CPU model)
+                    SystemInfoBadge(systemInfo: bridge?.systemInfo)
                 }
             }
 
@@ -223,6 +226,20 @@ struct DashboardView: View {
                     threadCount: status?.threadCount,
                     memoryHistory: history?.memoryHistory ?? [],
                     cpuHistory: history?.cpuHistory ?? []
+                )
+            }
+
+            // Secondary row: Disk + Network (gotop-style)
+            HStack(spacing: 16) {
+                DiskUsageCard(
+                    disks: status?.disks,
+                    history: history?.diskHistory ?? []
+                )
+
+                NetworkUsageCard(
+                    network: status?.network,
+                    rxHistory: history?.networkRxHistory ?? [],
+                    txHistory: history?.networkTxHistory ?? []
                 )
             }
 
@@ -1895,5 +1912,380 @@ struct ClickablePlayerIndicator: View {
         .scaleEffect(isHovered ? 1.003 : 1.0)
         .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isHovered)
         .onHover { isHovered = $0 }
+    }
+}
+
+// MARK: - System Info Badge (compact, for header)
+
+struct SystemInfoBadge: View {
+    let systemInfo: SystemInfoPayload?
+
+    var body: some View {
+        if let info = systemInfo {
+            HStack(spacing: 6) {
+                Image(systemName: "cpu")
+                    .font(.system(size: 9))
+                Text(truncatedCpuModel(info.cpuModel))
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                Text("•")
+                    .font(.system(size: 8))
+                    .foregroundColor(.white.opacity(0.3))
+                Text("\(info.cpuCores) cores")
+                    .font(.system(size: 10, weight: .medium))
+            }
+            .foregroundColor(.white.opacity(0.5))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Capsule().fill(Color.white.opacity(0.08)))
+        }
+    }
+
+    private func truncatedCpuModel(_ model: String) -> String {
+        // Truncate long CPU names (e.g., "AMD Ryzen 9 5900X 12-Core Processor" -> "Ryzen 9 5900X")
+        if model.lowercased().contains("ryzen") {
+            if let range = model.range(of: "Ryzen", options: .caseInsensitive) {
+                let start = range.lowerBound
+                let rest = model[start...]
+                let parts = rest.split(separator: " ").prefix(3)
+                return parts.joined(separator: " ")
+            }
+        }
+        if model.lowercased().contains("intel") || model.lowercased().contains("core") {
+            // Intel Core i7-12700K -> "i7-12700K"
+            if let match = model.range(of: "i[3579]-\\S+", options: .regularExpression) {
+                return String(model[match])
+            }
+        }
+        // Apple Silicon
+        if model.contains("Apple") {
+            return model.replacingOccurrences(of: "Apple ", with: "")
+        }
+        // Fallback: first 20 chars
+        if model.count > 20 {
+            return String(model.prefix(20)) + "…"
+        }
+        return model
+    }
+}
+
+// MARK: - Disk Usage Card (gotop-style)
+
+struct DiskUsageCard: View {
+    let disks: [DiskInfo]?
+    let history: [PerformanceHistory.DataPoint]
+
+    @State private var isHovered = false
+
+    private func formatBytes(_ bytes: Int64) -> String {
+        let gb = Double(bytes) / (1024 * 1024 * 1024)
+        if gb >= 1000 {
+            return String(format: "%.1f TB", gb / 1024)
+        } else if gb >= 100 {
+            return String(format: "%.0f GB", gb)
+        } else if gb >= 10 {
+            return String(format: "%.1f GB", gb)
+        } else {
+            return String(format: "%.2f GB", gb)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            HStack {
+                HStack(spacing: 6) {
+                    Image(systemName: "internaldrive")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.orange)
+
+                    Text("DISK")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.6))
+                        .textCase(.uppercase)
+                        .tracking(0.5)
+                }
+
+                Spacer()
+            }
+            .padding(.bottom, 12)
+
+            // Disk bars
+            if let disks = disks, !disks.isEmpty {
+                VStack(spacing: 8) {
+                    ForEach(disks.prefix(3), id: \.mount) { disk in
+                        DiskBarRow(disk: disk)
+                    }
+                }
+            } else {
+                HStack {
+                    Spacer()
+                    Text("N/A")
+                        .font(.system(size: 11))
+                        .foregroundColor(.white.opacity(0.3))
+                    Spacer()
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity)
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.orange.opacity(isHovered ? 0.3 : 0.15), lineWidth: 1)
+                }
+        }
+        .scaleEffect(isHovered ? 1.003 : 1.0)
+        .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isHovered)
+        .onHover { isHovered = $0 }
+    }
+}
+
+struct DiskBarRow: View {
+    let disk: DiskInfo
+
+    private var color: Color {
+        if disk.usagePercent < 70 { return Color(hex: "22C55E") }
+        if disk.usagePercent < 85 { return Color(hex: "EAB308") }
+        return Color(hex: "EF4444")
+    }
+
+    private func formatBytes(_ bytes: Int64) -> String {
+        let gb = Double(bytes) / (1024 * 1024 * 1024)
+        if gb >= 100 {
+            return String(format: "%.0fG", gb)
+        } else if gb >= 10 {
+            return String(format: "%.1fG", gb)
+        } else {
+            return String(format: "%.2fG", gb)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(disk.mount)
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.6))
+
+                Spacer()
+
+                HStack(spacing: 4) {
+                    Text(formatBytes(disk.usedBytes))
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white)
+                    Text("/")
+                        .font(.system(size: 9))
+                        .foregroundColor(.white.opacity(0.3))
+                    Text(formatBytes(disk.totalBytes))
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.5))
+                    Text(String(format: "%.0f%%", disk.usagePercent))
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundColor(color)
+                        .frame(width: 32, alignment: .trailing)
+                }
+            }
+
+            // Progress bar
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Color.white.opacity(0.1))
+
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(color)
+                        .frame(width: geo.size.width * min(disk.usagePercent / 100, 1.0))
+                }
+            }
+            .frame(height: 4)
+        }
+    }
+}
+
+// MARK: - Network Usage Card (gotop-style)
+
+struct NetworkUsageCard: View {
+    let network: NetworkInfo?
+    let rxHistory: [PerformanceHistory.DataPoint]
+    let txHistory: [PerformanceHistory.DataPoint]
+
+    @State private var isHovered = false
+
+    private func formatRate(_ bytesPerSec: Int64) -> String {
+        if bytesPerSec >= 1024 * 1024 * 1024 {
+            return String(format: "%.1f GB/s", Double(bytesPerSec) / (1024 * 1024 * 1024))
+        } else if bytesPerSec >= 1024 * 1024 {
+            return String(format: "%.1f MB/s", Double(bytesPerSec) / (1024 * 1024))
+        } else if bytesPerSec >= 1024 {
+            return String(format: "%.1f KB/s", Double(bytesPerSec) / 1024)
+        } else {
+            return String(format: "%d B/s", bytesPerSec)
+        }
+    }
+
+    private func formatTotal(_ bytes: Int64) -> String {
+        let gb = Double(bytes) / (1024 * 1024 * 1024)
+        if gb >= 100 {
+            return String(format: "%.0f GB", gb)
+        } else if gb >= 10 {
+            return String(format: "%.1f GB", gb)
+        } else if gb >= 1 {
+            return String(format: "%.2f GB", gb)
+        } else {
+            return String(format: "%.0f MB", Double(bytes) / (1024 * 1024))
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            HStack {
+                HStack(spacing: 6) {
+                    Image(systemName: "network")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.cyan)
+
+                    Text("NETWORK")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.6))
+                        .textCase(.uppercase)
+                        .tracking(0.5)
+                }
+
+                Spacer()
+            }
+            .padding(.bottom, 12)
+
+            if let net = network {
+                VStack(spacing: 10) {
+                    // RX (download)
+                    HStack {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.down")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(.green)
+                            Text("Rx")
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                .foregroundColor(.white.opacity(0.6))
+                        }
+                        .frame(width: 40, alignment: .leading)
+
+                        Text(formatTotal(net.rxBytes))
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.5))
+
+                        Spacer()
+
+                        Text(formatRate(net.rxBytesPerSec))
+                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                            .foregroundColor(.green)
+                    }
+
+                    // TX (upload)
+                    HStack {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.up")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(.blue)
+                            Text("Tx")
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                .foregroundColor(.white.opacity(0.6))
+                        }
+                        .frame(width: 40, alignment: .leading)
+
+                        Text(formatTotal(net.txBytes))
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.5))
+
+                        Spacer()
+
+                        Text(formatRate(net.txBytesPerSec))
+                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                            .foregroundColor(.blue)
+                    }
+
+                    // Mini sparklines
+                    if !rxHistory.isEmpty || !txHistory.isEmpty {
+                        NetworkSparkline(
+                            rxData: rxHistory.suffix(30).map { $0.value },
+                            txData: txHistory.suffix(30).map { $0.value }
+                        )
+                        .frame(height: 24)
+                    }
+                }
+            } else {
+                HStack {
+                    Spacer()
+                    Text("N/A")
+                        .font(.system(size: 11))
+                        .foregroundColor(.white.opacity(0.3))
+                    Spacer()
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity)
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.cyan.opacity(isHovered ? 0.3 : 0.15), lineWidth: 1)
+                }
+        }
+        .scaleEffect(isHovered ? 1.003 : 1.0)
+        .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isHovered)
+        .onHover { isHovered = $0 }
+    }
+}
+
+struct NetworkSparkline: View {
+    let rxData: [Double]
+    let txData: [Double]
+
+    var body: some View {
+        GeometryReader { geo in
+            let maxVal = max(
+                rxData.max() ?? 1,
+                txData.max() ?? 1,
+                1
+            )
+
+            ZStack {
+                // RX line (green)
+                if rxData.count > 1 {
+                    Path { path in
+                        for (index, value) in rxData.enumerated() {
+                            let x = geo.size.width * CGFloat(index) / CGFloat(rxData.count - 1)
+                            let y = geo.size.height * (1 - CGFloat(value / maxVal))
+                            if index == 0 {
+                                path.move(to: CGPoint(x: x, y: y))
+                            } else {
+                                path.addLine(to: CGPoint(x: x, y: y))
+                            }
+                        }
+                    }
+                    .stroke(Color.green.opacity(0.6), lineWidth: 1.5)
+                }
+
+                // TX line (blue)
+                if txData.count > 1 {
+                    Path { path in
+                        for (index, value) in txData.enumerated() {
+                            let x = geo.size.width * CGFloat(index) / CGFloat(txData.count - 1)
+                            let y = geo.size.height * (1 - CGFloat(value / maxVal))
+                            if index == 0 {
+                                path.move(to: CGPoint(x: x, y: y))
+                            } else {
+                                path.addLine(to: CGPoint(x: x, y: y))
+                            }
+                        }
+                    }
+                    .stroke(Color.blue.opacity(0.6), lineWidth: 1.5)
+                }
+            }
+        }
     }
 }

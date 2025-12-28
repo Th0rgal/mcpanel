@@ -74,6 +74,11 @@ public class MCPanelBridgePlugin extends JavaPlugin implements Listener {
     // Server start time for uptime calculation
     private long serverStartTime;
 
+    // Network I/O tracking for rate calculation
+    private long lastNetworkCheckTime = 0;
+    private long lastRxBytes = 0;
+    private long lastTxBytes = 0;
+
     // Debug logging toggle (config.yml)
     private boolean debugLogging = false;
 
@@ -121,6 +126,7 @@ public class MCPanelBridgePlugin extends JavaPlugin implements Listener {
         // Send ready event and generate command dump after server is fully loaded
         scheduleTask(() -> {
             sendBridgeReadyEvent();
+            sendSystemInfoEvent();
             generateCommandDump();
             exportPluginRegistries();
             startStatusBroadcaster();
@@ -238,7 +244,7 @@ public class MCPanelBridgePlugin extends JavaPlugin implements Listener {
     }
 
     /**
-     * Build the current status payload.
+     * Build the current status payload with comprehensive metrics.
      */
     private MCPanelEvent.StatusPayload buildStatusPayload() {
         double tps = 20.0;
@@ -264,6 +270,7 @@ public class MCPanelBridgePlugin extends JavaPlugin implements Listener {
         // Collect CPU and thread metrics via JMX
         Double cpuUsage = null;
         Double systemCpu = null;
+        List<Double> perCoreCpu = null;
         Integer threadCount = null;
         Integer peakThreadCount = null;
 
@@ -286,6 +293,9 @@ public class MCPanelBridgePlugin extends JavaPlugin implements Listener {
             // CPU metrics not available on this JVM
         }
 
+        // Per-core CPU usage (Linux only via /proc/stat)
+        perCoreCpu = collectPerCoreCpuUsage();
+
         try {
             java.lang.management.ThreadMXBean threadBean =
                     java.lang.management.ManagementFactory.getThreadMXBean();
@@ -294,6 +304,12 @@ public class MCPanelBridgePlugin extends JavaPlugin implements Listener {
         } catch (Exception e) {
             // Thread metrics not available
         }
+
+        // Collect disk metrics
+        List<MCPanelEvent.DiskInfo> disks = collectDiskMetrics();
+
+        // Collect network metrics
+        MCPanelEvent.NetworkInfo network = collectNetworkMetrics();
 
         return new MCPanelEvent.StatusPayload(
                 Math.min(tps, 20.0), // Cap at 20 TPS
@@ -305,9 +321,146 @@ public class MCPanelBridgePlugin extends JavaPlugin implements Listener {
                 uptimeSeconds,
                 cpuUsage,
                 systemCpu,
+                perCoreCpu,
                 threadCount,
-                peakThreadCount
+                peakThreadCount,
+                disks,
+                network
         );
+    }
+
+    /**
+     * Collect per-core CPU usage from /proc/stat (Linux only).
+     * Returns null if not available (non-Linux or error).
+     */
+    private List<Double> collectPerCoreCpuUsage() {
+        // This is a simplified implementation - for accurate per-core usage
+        // we'd need to track deltas between /proc/stat readings.
+        // For now, return null and rely on aggregate CPU from JMX.
+        // A full implementation would require storing previous cpu times.
+        try {
+            java.io.File procStat = new java.io.File("/proc/stat");
+            if (!procStat.exists()) return null;
+
+            // For a proper implementation, we'd need to:
+            // 1. Read cpu0, cpu1, etc lines from /proc/stat
+            // 2. Compare with previous readings to calculate usage %
+            // This requires maintaining state between calls
+            // For now, return null and let the UI fall back to aggregate
+            return null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Collect disk usage for mounted filesystems.
+     */
+    private List<MCPanelEvent.DiskInfo> collectDiskMetrics() {
+        List<MCPanelEvent.DiskInfo> disks = new ArrayList<>();
+
+        try {
+            // Use Java NIO to get filesystem info
+            for (java.nio.file.FileStore store : java.nio.file.FileSystems.getDefault().getFileStores()) {
+                try {
+                    // Skip pseudo filesystems
+                    String type = store.type();
+                    if (type.equals("tmpfs") || type.equals("devtmpfs") || type.equals("overlay") ||
+                        type.equals("squashfs") || type.startsWith("fuse")) {
+                        continue;
+                    }
+
+                    long total = store.getTotalSpace();
+                    long usable = store.getUsableSpace();
+                    long used = total - usable;
+
+                    // Skip tiny or zero-size filesystems
+                    if (total < 1024 * 1024 * 100) continue; // Skip < 100MB
+
+                    double usagePercent = total > 0 ? (double) used / total * 100.0 : 0;
+
+                    // Get mount point from store name (format varies by OS)
+                    String name = store.name();
+                    String mount = store.toString();
+                    // Extract mount point from "name (mount)" format
+                    int parenIdx = mount.lastIndexOf('(');
+                    if (parenIdx > 0) {
+                        mount = mount.substring(parenIdx + 1, mount.length() - 1);
+                    }
+
+                    disks.add(new MCPanelEvent.DiskInfo(mount, name, used, total, usagePercent));
+                } catch (java.io.IOException e) {
+                    // Skip this store
+                }
+            }
+        } catch (Exception e) {
+            logDebug("Failed to collect disk metrics: " + e.getMessage());
+        }
+
+        return disks.isEmpty() ? null : disks;
+    }
+
+    /**
+     * Collect network I/O metrics.
+     * Uses /proc/net/dev on Linux, or falls back to null.
+     */
+    private MCPanelEvent.NetworkInfo collectNetworkMetrics() {
+        try {
+            java.io.File procNetDev = new java.io.File("/proc/net/dev");
+            if (!procNetDev.exists()) return null;
+
+            long rxBytes = 0;
+            long txBytes = 0;
+
+            try (java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.FileReader(procNetDev))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    line = line.trim();
+                    // Skip header lines
+                    if (line.startsWith("Inter") || line.startsWith("face")) continue;
+
+                    // Format: "iface: rx_bytes rx_packets ... tx_bytes tx_packets ..."
+                    int colonIdx = line.indexOf(':');
+                    if (colonIdx < 0) continue;
+
+                    String iface = line.substring(0, colonIdx).trim();
+                    // Skip loopback
+                    if (iface.equals("lo")) continue;
+
+                    String[] parts = line.substring(colonIdx + 1).trim().split("\\s+");
+                    if (parts.length >= 9) {
+                        rxBytes += Long.parseLong(parts[0]);
+                        txBytes += Long.parseLong(parts[8]);
+                    }
+                }
+            }
+
+            // Calculate rates
+            long now = System.currentTimeMillis();
+            long rxBytesPerSec = 0;
+            long txBytesPerSec = 0;
+
+            if (lastNetworkCheckTime > 0) {
+                long elapsedMs = now - lastNetworkCheckTime;
+                if (elapsedMs > 0) {
+                    rxBytesPerSec = (rxBytes - lastRxBytes) * 1000 / elapsedMs;
+                    txBytesPerSec = (txBytes - lastTxBytes) * 1000 / elapsedMs;
+                    // Clamp to non-negative (in case of counter reset)
+                    rxBytesPerSec = Math.max(0, rxBytesPerSec);
+                    txBytesPerSec = Math.max(0, txBytesPerSec);
+                }
+            }
+
+            // Update tracking state
+            lastNetworkCheckTime = now;
+            lastRxBytes = rxBytes;
+            lastTxBytes = txBytes;
+
+            return new MCPanelEvent.NetworkInfo(rxBytes, txBytes, rxBytesPerSec, txBytesPerSec);
+        } catch (Exception e) {
+            logDebug("Failed to collect network metrics: " + e.getMessage());
+            return null;
+        }
     }
 
     /**
@@ -436,6 +589,132 @@ public class MCPanelBridgePlugin extends JavaPlugin implements Listener {
 
         sendEvent(event);
         logDebug("Bridge ready - Features: " + features);
+    }
+
+    /**
+     * Send system info event with static hardware/software details.
+     */
+    private void sendSystemInfoEvent() {
+        // JVM info
+        String javaVersion = System.getProperty("java.version", "unknown");
+        String javaVendor = System.getProperty("java.vendor", "unknown");
+        String jvmName = System.getProperty("java.vm.name", "unknown");
+
+        // Server info
+        String serverVersion = Bukkit.getVersion();
+        String bukkitVersion = Bukkit.getBukkitVersion();
+        String minecraftVersion = Bukkit.getMinecraftVersion();
+
+        // OS info
+        String osName = System.getProperty("os.name", "unknown");
+        String osVersion = System.getProperty("os.version", "unknown");
+        String osArch = System.getProperty("os.arch", "unknown");
+
+        // Hardware info
+        int cpuCores = Runtime.getRuntime().availableProcessors();
+        int cpuPhysicalCores = cpuCores; // May be same or different
+        String cpuModel = "unknown";
+
+        // Try to get CPU model from /proc/cpuinfo (Linux) or via JMX
+        try {
+            java.io.File cpuInfo = new java.io.File("/proc/cpuinfo");
+            if (cpuInfo.exists()) {
+                try (java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.FileReader(cpuInfo))) {
+                    String line;
+                    int physicalIds = 0;
+                    java.util.Set<String> seenPhysicalIds = new java.util.HashSet<>();
+
+                    while ((line = reader.readLine()) != null) {
+                        if (line.startsWith("model name") && cpuModel.equals("unknown")) {
+                            int colonIdx = line.indexOf(':');
+                            if (colonIdx > 0) {
+                                cpuModel = line.substring(colonIdx + 1).trim();
+                            }
+                        }
+                        if (line.startsWith("physical id")) {
+                            int colonIdx = line.indexOf(':');
+                            if (colonIdx > 0) {
+                                seenPhysicalIds.add(line.substring(colonIdx + 1).trim());
+                            }
+                        }
+                        if (line.startsWith("cpu cores")) {
+                            int colonIdx = line.indexOf(':');
+                            if (colonIdx > 0) {
+                                try {
+                                    int cores = Integer.parseInt(line.substring(colonIdx + 1).trim());
+                                    cpuPhysicalCores = Math.max(cpuPhysicalCores, cores * Math.max(1, seenPhysicalIds.size()));
+                                } catch (NumberFormatException ignored) {}
+                            }
+                        }
+                    }
+                    // Adjust for multi-socket systems
+                    if (!seenPhysicalIds.isEmpty()) {
+                        cpuPhysicalCores = Math.min(cpuPhysicalCores, cpuCores);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            logDebug("Failed to read CPU info: " + e.getMessage());
+        }
+
+        // On macOS, try sysctl
+        if (cpuModel.equals("unknown") && osName.toLowerCase().contains("mac")) {
+            try {
+                Process process = Runtime.getRuntime().exec(new String[]{"sysctl", "-n", "machdep.cpu.brand_string"});
+                try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(process.getInputStream()))) {
+                    String line = reader.readLine();
+                    if (line != null && !line.isEmpty()) {
+                        cpuModel = line.trim();
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+
+        // Total system memory
+        long totalMemoryMB = 0;
+        try {
+            java.lang.management.OperatingSystemMXBean osBean =
+                    java.lang.management.ManagementFactory.getOperatingSystemMXBean();
+            if (osBean instanceof com.sun.management.OperatingSystemMXBean sunBean) {
+                totalMemoryMB = sunBean.getTotalMemorySize() / (1024 * 1024);
+            }
+        } catch (Exception e) {
+            // Fall back to JVM max memory
+            totalMemoryMB = Runtime.getRuntime().maxMemory() / (1024 * 1024);
+        }
+
+        // Network interfaces
+        List<String> networkInterfaces = new ArrayList<>();
+        try {
+            java.util.Enumeration<java.net.NetworkInterface> nets = java.net.NetworkInterface.getNetworkInterfaces();
+            while (nets.hasMoreElements()) {
+                java.net.NetworkInterface netIf = nets.nextElement();
+                if (netIf.isUp() && !netIf.isLoopback() && !netIf.isVirtual()) {
+                    networkInterfaces.add(netIf.getDisplayName());
+                }
+            }
+        } catch (Exception ignored) {}
+
+        MCPanelEvent.SystemInfoPayload payload = new MCPanelEvent.SystemInfoPayload(
+                javaVersion,
+                javaVendor,
+                jvmName,
+                serverVersion,
+                bukkitVersion,
+                minecraftVersion,
+                osName,
+                osVersion,
+                osArch,
+                cpuModel,
+                cpuCores,
+                cpuPhysicalCores,
+                totalMemoryMB,
+                networkInterfaces
+        );
+
+        sendEvent(MCPanelEvent.systemInfo(payload));
+        logDebug("System info sent - CPU: " + cpuModel + " (" + cpuCores + " cores)");
     }
 
     /**

@@ -119,7 +119,12 @@ public class MCPanelEvent extends MCPanelMessage {
          * Command tree has been updated (plugins loaded/unloaded).
          * MCPanel should refresh commands.json via SFTP.
          */
-        COMMANDS_UPDATED
+        COMMANDS_UPDATED,
+
+        /**
+         * System info (static hardware/software info, sent once on startup).
+         */
+        SYSTEM_INFO
     }
 
     // Factory methods for new event types
@@ -153,12 +158,20 @@ public class MCPanelEvent extends MCPanelMessage {
         return create(EventType.COMMANDS_UPDATED, new CommandsUpdatedPayload(reason, System.currentTimeMillis()));
     }
 
+    /**
+     * Create a system info event (static hardware/software details).
+     */
+    public static MCPanelEvent systemInfo(@NotNull SystemInfoPayload payload) {
+        return create(EventType.SYSTEM_INFO, payload);
+    }
+
     // Payload records
     public record BridgeReadyPayload(String version, String platform, List<String> features) {}
     public record PlayerPayload(String name, String uuid) {}
 
     /**
-     * Status update payload with TPS, memory, CPU, and basic info.
+     * Status update payload with TPS, memory, CPU, disk, network metrics.
+     * Designed to support gotop-style visualization.
      */
     public record StatusPayload(
             double tps,
@@ -168,11 +181,37 @@ public class MCPanelEvent extends MCPanelMessage {
             long usedMemoryMB,
             long maxMemoryMB,
             long uptimeSeconds,
-            // CPU and thread metrics (may be null if unavailable)
+            // CPU metrics
             Double cpuUsagePercent,      // JVM process CPU usage 0-100
             Double systemCpuPercent,     // System-wide CPU usage 0-100
+            List<Double> perCoreCpu,     // Per-core CPU usage (0-100 each)
             Integer threadCount,         // Active thread count
-            Integer peakThreadCount      // Peak thread count since JVM start
+            Integer peakThreadCount,     // Peak thread count since JVM start
+            // Disk metrics (may be null if unavailable)
+            List<DiskInfo> disks,
+            // Network metrics (may be null if unavailable)
+            NetworkInfo network
+    ) {}
+
+    /**
+     * Disk partition info (like gotop's disk usage panel).
+     */
+    public record DiskInfo(
+            String mount,           // Mount point (e.g., "/", "/home")
+            String device,          // Device name (e.g., "sda1", "nvme0n1p1")
+            long usedBytes,         // Used space in bytes
+            long totalBytes,        // Total space in bytes
+            double usagePercent     // Usage percentage 0-100
+    ) {}
+
+    /**
+     * Network I/O info (like gotop's network panel).
+     */
+    public record NetworkInfo(
+            long rxBytes,           // Total bytes received since boot
+            long txBytes,           // Total bytes transmitted since boot
+            long rxBytesPerSec,     // Current receive rate (bytes/sec)
+            long txBytesPerSec      // Current transmit rate (bytes/sec)
     ) {}
 
     /**
@@ -201,5 +240,31 @@ public class MCPanelEvent extends MCPanelMessage {
     public record CommandsUpdatedPayload(
             String reason,
             long timestamp
+    ) {}
+
+    /**
+     * System info payload - static hardware/software details (sent once on startup).
+     * Like gotop's header info showing CPU model, core count, etc.
+     */
+    public record SystemInfoPayload(
+            // JVM info
+            String javaVersion,         // e.g., "21.0.1"
+            String javaVendor,          // e.g., "Eclipse Adoptium"
+            String jvmName,             // e.g., "OpenJDK 64-Bit Server VM"
+            // Server info
+            String serverVersion,       // e.g., "Paper 1.21.4-123"
+            String bukkitVersion,       // e.g., "1.21.4-R0.1-SNAPSHOT"
+            String minecraftVersion,    // e.g., "1.21.4"
+            // OS info
+            String osName,              // e.g., "Linux"
+            String osVersion,           // e.g., "5.15.0-generic"
+            String osArch,              // e.g., "amd64"
+            // Hardware info
+            String cpuModel,            // e.g., "AMD Ryzen 9 5900X 12-Core Processor"
+            int cpuCores,               // Logical processor count
+            int cpuPhysicalCores,       // Physical core count (may equal cpuCores if unavailable)
+            long totalMemoryMB,         // Total system RAM in MB
+            // Network interfaces (for display)
+            List<String> networkInterfaces
     ) {}
 }

@@ -29,6 +29,13 @@ class PerformanceHistory: ObservableObject {
     @Published var systemCpuHistory: [DataPoint] = []
     @Published var threadCountHistory: [DataPoint] = []
 
+    /// Network I/O history (rates in bytes/sec)
+    @Published var networkRxHistory: [DataPoint] = []
+    @Published var networkTxHistory: [DataPoint] = []
+
+    /// Disk usage history (percentage for primary disk)
+    @Published var diskHistory: [DataPoint] = []
+
     private let maxRecentSamples = 3600  // 30 min × 2/sec
 
     /// Downsampled: last 6 hours at 30s averages = 720 points
@@ -65,6 +72,17 @@ class PerformanceHistory: ObservableObject {
             threadCountHistory.append(DataPoint(timestamp: now, value: Double(threads)))
         }
 
+        // Add network metrics if available
+        if let network = status.network {
+            networkRxHistory.append(DataPoint(timestamp: now, value: Double(network.rxBytesPerSec)))
+            networkTxHistory.append(DataPoint(timestamp: now, value: Double(network.txBytesPerSec)))
+        }
+
+        // Add disk usage (use first disk, typically root)
+        if let disks = status.disks, let firstDisk = disks.first {
+            diskHistory.append(DataPoint(timestamp: now, value: firstDisk.usagePercent))
+        }
+
         // Trim old data
         trimHistory()
 
@@ -97,6 +115,15 @@ class PerformanceHistory: ObservableObject {
         }
         if threadCountHistory.count > maxRecentSamples {
             threadCountHistory.removeFirst(threadCountHistory.count - maxRecentSamples)
+        }
+        if networkRxHistory.count > maxRecentSamples {
+            networkRxHistory.removeFirst(networkRxHistory.count - maxRecentSamples)
+        }
+        if networkTxHistory.count > maxRecentSamples {
+            networkTxHistory.removeFirst(networkTxHistory.count - maxRecentSamples)
+        }
+        if diskHistory.count > maxRecentSamples {
+            diskHistory.removeFirst(diskHistory.count - maxRecentSamples)
         }
     }
 
@@ -136,6 +163,9 @@ class PerformanceHistory: ObservableObject {
         cpuHistory = []
         systemCpuHistory = []
         threadCountHistory = []
+        networkRxHistory = []
+        networkTxHistory = []
+        diskHistory = []
         hourlyTpsHistory = []
         hourlyMemoryHistory = []
     }
@@ -173,6 +203,9 @@ class MCPanelBridgeService: ObservableObject {
 
     /// Plugin registries (key: "plugin:type", value: list of values)
     @Published var registries: [String: [String]] = [:]
+
+    /// System info (static hardware/software details)
+    @Published var systemInfo: SystemInfoPayload?
 
     /// Performance history for charts and sparklines
     @Published var performanceHistory = PerformanceHistory()
@@ -328,6 +361,13 @@ class MCPanelBridgeService: ObservableObject {
                 Task {
                     await fetchCommandTree()
                 }
+            }
+
+        case "system_info":
+            if let payload = event.payload?.decode(SystemInfoPayload.self) {
+                systemInfo = payload
+                print("[Bridge] System info: \(payload.cpuModel) (\(payload.cpuCores) cores), \(payload.javaVersion)")
+                logger.log("[Bridge] System info received - OS: \(payload.osName) \(payload.osVersion), CPU: \(payload.cpuModel)", category: .bridge)
             }
 
         default:
