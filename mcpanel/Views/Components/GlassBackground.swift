@@ -1,6 +1,6 @@
 //
 //  GlassBackground.swift
-//  OfflineCinema
+//  MCPanel
 //
 //  System Liquid Glass background.
 //  - Uses NSGlassEffectView when available (macOS Tahoe+).

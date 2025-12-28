@@ -68,7 +68,7 @@ cat > "$CONTENTS_DIR/Info.plist" << EOF
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
-    <string>com.mcpanel.app</string>
+    <string>md.thomas.mcpanel</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>

@@ -1,6 +1,6 @@
 //
 //  WindowStateObserver.swift
-//  OfflineCinema
+//  MCPanel
 //
 //  Observes NSWindow fullscreen state for SwiftUI layouts.
 //

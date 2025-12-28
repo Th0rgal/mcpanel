@@ -112,7 +112,6 @@ iOSInjectionProject/
 
 ### App Bundle ###
 # Built app bundle (rebuild with build-app.sh)
-OfflineCinema.app/
 MCPanel.app/
 
 ### Secrets ###
