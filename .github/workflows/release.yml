@@ -1,0 +1,84 @@
+name: Plugin Build & Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: mcpanel-bridge
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build with Gradle
+        run: ./gradlew build
+
+      - name: Get version from build.gradle.kts
+        id: version
+        run: |
+          VERSION=$(grep 'val pluginVersion' build.gradle.kts | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Upload Bukkit JAR as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MCPanelBridge-${{ steps.version.outputs.version }}-Bukkit
+          path: mcpanel-bridge/build/libs/MCPanelBridge-${{ steps.version.outputs.version }}-Bukkit.jar
+          if-no-files-found: error
+
+      - name: Upload Velocity JAR as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MCPanelBridge-${{ steps.version.outputs.version }}-Velocity
+          path: mcpanel-bridge/build/libs/MCPanelBridge-${{ steps.version.outputs.version }}-Velocity.jar
+          if-no-files-found: error
+
+      - name: Copy JARs with stable names
+        run: |
+          cp build/libs/MCPanelBridge-${{ steps.version.outputs.version }}-Bukkit.jar build/libs/MCPanelBridge-Bukkit.jar
+          cp build/libs/MCPanelBridge-${{ steps.version.outputs.version }}-Velocity.jar build/libs/MCPanelBridge-Velocity.jar
+
+      - name: Upload JARs to Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            mcpanel-bridge/build/libs/MCPanelBridge-${{ steps.version.outputs.version }}-Bukkit.jar
+            mcpanel-bridge/build/libs/MCPanelBridge-${{ steps.version.outputs.version }}-Velocity.jar
+            mcpanel-bridge/build/libs/MCPanelBridge-Bukkit.jar
+            mcpanel-bridge/build/libs/MCPanelBridge-Velocity.jar
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Successfully built MCPanelBridge" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Artifacts:**" >> $GITHUB_STEP_SUMMARY
+          echo "- MCPanelBridge-${{ steps.version.outputs.version }}-Bukkit.jar" >> $GITHUB_STEP_SUMMARY
+          echo "- MCPanelBridge-${{ steps.version.outputs.version }}-Velocity.jar" >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Release:** ${{ github.event.release.tag_name }}" >> $GITHUB_STEP_SUMMARY
+            echo "JARs attached to release" >> $GITHUB_STEP_SUMMARY
+          fi
