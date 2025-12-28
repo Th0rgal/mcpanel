@@ -2,7 +2,6 @@ package dev.th0rgal.mcpanel.bridge.util;
 
 import org.jetbrains.annotations.NotNull;
 
-import java.io.PrintStream;
 import java.util.Base64;
 
 /**
@@ -29,9 +28,7 @@ public final class OSCEncoder {
      * This writes directly to System.out to bypass any logging framework.
      */
     public static void send(@NotNull String json) {
-        PrintStream out = System.out;
-        out.print(encode(json));
-        out.flush();
+        RawStdout.print(encode(json));
     }
 
     /**

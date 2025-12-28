@@ -16,6 +16,7 @@ import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
 import dev.th0rgal.mcpanel.bridge.protocol.*;
 import dev.th0rgal.mcpanel.bridge.protocol.payloads.*;
+import dev.th0rgal.mcpanel.bridge.util.RawStdout;
 import org.slf4j.Logger;
 
 import java.io.BufferedReader;
@@ -319,16 +320,14 @@ public class MCPanelBridgeVelocity {
      * Send a response to MCPanel via stdout OSC.
      */
     private void sendResponse(MCPanelResponse response) {
-        System.out.print(response.encode());
-        System.out.flush();
+        RawStdout.print(response.encode());
     }
 
     /**
      * Send an event to MCPanel via stdout OSC.
      */
     private void sendEvent(MCPanelEvent event) {
-        System.out.print(event.encode());
-        System.out.flush();
+        RawStdout.print(event.encode());
     }
 
     // Event handlers

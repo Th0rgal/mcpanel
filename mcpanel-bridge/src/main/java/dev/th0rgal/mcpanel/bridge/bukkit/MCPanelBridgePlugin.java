@@ -7,6 +7,7 @@ import dev.th0rgal.mcpanel.bridge.handler.CompletionHandler;
 import dev.th0rgal.mcpanel.bridge.protocol.*;
 import dev.th0rgal.mcpanel.bridge.protocol.payloads.*;
 import dev.th0rgal.mcpanel.bridge.util.BrigadierExporter;
+import dev.th0rgal.mcpanel.bridge.util.RawStdout;
 import org.bukkit.Bukkit;
 import org.bukkit.World;
 import org.bukkit.command.Command;
@@ -1111,16 +1112,14 @@ public class MCPanelBridgePlugin extends JavaPlugin implements Listener {
      * Send a response to MCPanel via stdout OSC.
      */
     private void sendResponse(@NotNull MCPanelResponse response) {
-        System.out.print(response.encode());
-        System.out.flush();
+        RawStdout.print(response.encode());
     }
 
     /**
      * Send an event to MCPanel via stdout OSC.
      */
     public void sendEvent(@NotNull MCPanelEvent event) {
-        System.out.print(event.encode());
-        System.out.flush();
+        RawStdout.print(event.encode());
     }
 
     private void logDebug(@NotNull String message) {
