@@ -205,6 +205,17 @@ struct DashboardView: View {
         let bridge = serverManager.bridgeServices[server.id]
         let status = bridge?.serverStatus
         let history = bridge?.performanceHistory
+        let cpuHistory: [PerformanceHistory.DataPoint] = {
+            guard let status, let history else { return [] }
+            if status.cpuUsagePercent != nil {
+                return history.cpuHistory
+            }
+            if status.systemCpuPercent != nil {
+                return history.systemCpuHistory
+            }
+            return []
+        }()
+        let primaryRowMinHeight: CGFloat = 210
 
         return VStack(spacing: 16) {
             // Primary row: Tick Performance + Resource Monitor (gotop-style)
@@ -216,6 +227,7 @@ struct DashboardView: View {
                     tpsHistory: history?.tpsHistory ?? [],
                     msptHistory: history?.msptHistory ?? []
                 )
+                .frame(minHeight: primaryRowMinHeight, alignment: .top)
 
                 // Memory + CPU (gotop-style)
                 ResourceMonitorCard(
@@ -225,8 +237,9 @@ struct DashboardView: View {
                     systemCpuPercent: status?.systemCpuPercent,
                     threadCount: status?.threadCount,
                     memoryHistory: history?.memoryHistory ?? [],
-                    cpuHistory: history?.cpuHistory ?? []
+                    cpuHistory: cpuHistory
                 )
+                .frame(minHeight: primaryRowMinHeight, alignment: .top)
             }
 
             // Secondary row: Disk + Network (gotop-style)
@@ -1697,6 +1710,34 @@ struct GotopResourceBar: View {
     }
 }
 
+struct GotopResourceBarPlaceholder: View {
+    let label: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(label)
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.4))
+
+                Spacer()
+
+                Text("N/A")
+                    .font(.system(size: 11))
+                    .foregroundColor(.white.opacity(0.35))
+            }
+
+            RoundedRectangle(cornerRadius: 4)
+                .fill(Color.white.opacity(0.05))
+                .frame(height: 24)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                )
+        }
+    }
+}
+
 // MARK: - Resource Monitor Card (Memory + CPU gotop-style)
 
 struct ResourceMonitorCard: View {
@@ -1721,10 +1762,20 @@ struct ResourceMonitorCard: View {
     }
 
     private var cpuColor: Color {
-        guard let cpu = cpuPercent else { return .gray }
+        guard let cpu = displayCpuPercent else { return .gray }
         if cpu < 50 { return Color(hex: "3B82F6") }  // Blue
         if cpu < 80 { return Color(hex: "EAB308") }
         return Color(hex: "EF4444")
+    }
+
+    private var displayCpuPercent: Double? {
+        cpuPercent ?? systemCpuPercent
+    }
+
+    private var cpuLabel: String {
+        if cpuPercent != nil { return "CPU" }
+        if systemCpuPercent != nil { return "CPU (SYS)" }
+        return "CPU"
     }
 
     var body: some View {
@@ -1771,9 +1822,9 @@ struct ResourceMonitorCard: View {
             .padding(.bottom, 12)
 
             // CPU bar (if available)
-            if let cpu = cpuPercent {
+            if let cpu = displayCpuPercent {
                 GotopResourceBar(
-                    label: "CPU",
+                    label: cpuLabel,
                     value: cpu,
                     maxValue: 100,
                     displayValue: String(format: "%.1f%%", cpu),
@@ -1783,15 +1834,7 @@ struct ResourceMonitorCard: View {
                 )
             } else {
                 // CPU not available placeholder
-                HStack {
-                    Text("CPU")
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.4))
-                    Spacer()
-                    Text("N/A")
-                        .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.3))
-                }
+                GotopResourceBarPlaceholder(label: "CPU")
             }
         }
         .padding(20)

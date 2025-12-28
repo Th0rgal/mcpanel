@@ -79,6 +79,10 @@ public class MCPanelBridgePlugin extends JavaPlugin implements Listener {
     private long lastRxBytes = 0;
     private long lastTxBytes = 0;
 
+    // CPU usage fallback tracking (process CPU time deltas)
+    private long lastProcessCpuTimeNs = -1;
+    private long lastProcessCpuSampleTimeNs = -1;
+
     // Debug logging toggle (config.yml)
     private boolean debugLogging = false;
 
@@ -283,8 +287,18 @@ public class MCPanelBridgePlugin extends JavaPlugin implements Listener {
                 double processCpu = sunBean.getProcessCpuLoad();
                 if (processCpu >= 0) {
                     cpuUsage = processCpu * 100.0;
+                } else {
+                    // Fallback to manual process CPU calculation using cpu time deltas
+                    Double fallback = computeProcessCpuFallback(sunBean);
+                    if (fallback != null) {
+                        cpuUsage = fallback;
+                    }
                 }
-                double sysCpu = sunBean.getCpuLoad();
+
+                double sysCpu = sunBean.getSystemCpuLoad();
+                if (sysCpu < 0) {
+                    sysCpu = sunBean.getCpuLoad();
+                }
                 if (sysCpu >= 0) {
                     systemCpu = sysCpu * 100.0;
                 }
@@ -327,6 +341,38 @@ public class MCPanelBridgePlugin extends JavaPlugin implements Listener {
                 disks,
                 network
         );
+    }
+
+    /**
+     * Compute process CPU usage from process CPU time deltas.
+     * Returns null until at least two samples are available.
+     */
+    private Double computeProcessCpuFallback(@NotNull com.sun.management.OperatingSystemMXBean sunBean) {
+        long processCpuTime = sunBean.getProcessCpuTime(); // ns
+        long now = System.nanoTime();
+
+        if (processCpuTime < 0) {
+            lastProcessCpuTimeNs = processCpuTime;
+            lastProcessCpuSampleTimeNs = now;
+            return null;
+        }
+
+        Double computed = null;
+        if (lastProcessCpuTimeNs > 0 && lastProcessCpuSampleTimeNs > 0) {
+            long cpuDelta = processCpuTime - lastProcessCpuTimeNs;
+            long timeDelta = now - lastProcessCpuSampleTimeNs;
+            if (cpuDelta >= 0 && timeDelta > 0) {
+                int cores = Math.max(1, sunBean.getAvailableProcessors());
+                double usage = ((double) cpuDelta / (double) timeDelta) / cores * 100.0;
+                if (!Double.isNaN(usage) && usage >= 0) {
+                    computed = Math.min(usage, 100.0);
+                }
+            }
+        }
+
+        lastProcessCpuTimeNs = processCpuTime;
+        lastProcessCpuSampleTimeNs = now;
+        return computed;
     }
 
     /**
