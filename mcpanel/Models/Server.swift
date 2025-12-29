@@ -272,19 +272,34 @@ struct Server: Identifiable, Codable, Hashable {
                 if isStale {
                     // Bookmark is stale (file moved/renamed/system updated)
                     // User will need to re-select SSH key in settings
-                    print("[Server] SSH key bookmark is stale - please re-select your SSH key in server settings")
+                    print("[Server] SSH key bookmark is stale for path: \(url.path) - please re-select your SSH key in server settings")
                 }
                 if url.startAccessingSecurityScopedResource() {
+                    print("[Server] Successfully started accessing security-scoped resource: \(url.path)")
                     return (url.path, { url.stopAccessingSecurityScopedResource() })
+                } else {
+                    // startAccessingSecurityScopedResource failed - this can happen if:
+                    // - The bookmark was created without proper security scope
+                    // - Too many security-scoped resources are already being accessed
+                    // - The bookmark is invalid
+                    print("[Server] Failed to start accessing security-scoped resource for: \(url.path)")
+                    print("[Server] Bookmark exists but access failed - user should re-select SSH key in settings")
+                    // Don't fall through to direct path - it won't work in sandbox
+                    // Return nil to indicate the key couldn't be accessed
+                    return (nil, { })
                 }
             } catch {
                 print("[Server] Failed to resolve SSH key bookmark: \(error)")
+                // Bookmark resolution failed completely - don't fall through
+                return (nil, { })
             }
         }
 
-        // Fall back to direct path (works outside sandbox or for system SSH keys)
+        // Fall back to direct path only when NO bookmark exists
+        // (works outside sandbox or for system SSH keys like ssh-agent)
         if let path = identityFilePath, !path.isEmpty {
             let expandedPath = NSString(string: path).expandingTildeInPath
+            print("[Server] Using direct SSH key path (no bookmark): \(expandedPath)")
             return (expandedPath, { })
         }
 
@@ -294,13 +309,16 @@ struct Server: Identifiable, Codable, Hashable {
     /// Create a security-scoped bookmark for an SSH key file
     static func createSSHKeyBookmark(for url: URL) -> Data? {
         do {
-            return try url.bookmarkData(
+            // The URL from NSOpenPanel already has implicit access, so we can create a bookmark directly
+            let bookmark = try url.bookmarkData(
                 options: .withSecurityScope,
                 includingResourceValuesForKeys: nil,
                 relativeTo: nil
             )
+            print("[Server] Successfully created security-scoped bookmark for: \(url.path)")
+            return bookmark
         } catch {
-            print("[Server] Failed to create SSH key bookmark: \(error)")
+            print("[Server] Failed to create SSH key bookmark for \(url.path): \(error)")
             return nil
         }
     }

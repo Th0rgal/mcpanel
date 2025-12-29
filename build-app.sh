@@ -78,9 +78,9 @@ cat > "$CONTENTS_DIR/Info.plist" << EOF
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>1.1.0</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>2</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>
@@ -104,11 +104,20 @@ echo -n "APPL????" > "$CONTENTS_DIR/PkgInfo"
 
 echo "✅ App bundle created: $APP_BUNDLE"
 echo ""
-echo "🚀 Launching MCPanel..."
 
 # Quit any running instance
 osascript -e 'tell application "MCPanel" to quit' >/dev/null 2>&1 || true
 pkill -x MCPanel >/dev/null 2>&1 || true
 sleep 0.5
 
-open "$APP_BUNDLE"
+# Check for --log flag to run with console output
+if [[ "$1" == "--log" ]] || [[ "$2" == "--log" ]]; then
+    echo "🚀 Launching MCPanel with console logging..."
+    echo "   (Press Ctrl+C to quit)"
+    echo ""
+    "$MACOS_DIR/$APP_NAME"
+else
+    echo "🚀 Launching MCPanel..."
+    echo "   (Use --log to see console output)"
+    open "$APP_BUNDLE"
+fi
