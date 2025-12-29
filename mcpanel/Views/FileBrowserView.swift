@@ -7,9 +7,11 @@
 
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 struct FileBrowserView: View {
     @EnvironmentObject var serverManager: ServerManager
+    @StateObject private var uploadManager = UploadManager()
     @State private var selectedFile: FileItem?
     @State private var showHiddenFiles = false
     @State private var fileToDelete: FileItem?
@@ -18,6 +20,7 @@ struct FileBrowserView: View {
     @State private var isDeleting = false
     @State private var operationError: String?
     @State private var showErrorAlert = false
+    @State private var isDragOver = false
 
     var filteredFiles: [FileItem] {
         var files = serverManager.selectedServerFiles
@@ -30,16 +33,38 @@ struct FileBrowserView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Path bar
-            pathBar
+        ZStack(alignment: .bottom) {
+            VStack(spacing: 0) {
+                // Path bar
+                pathBar
 
-            // File list
-            if filteredFiles.isEmpty {
-                emptyState
-            } else {
-                fileList
+                // File list
+                if filteredFiles.isEmpty {
+                    emptyState
+                } else {
+                    fileList
+                }
             }
+
+            // Drag overlay
+            if isDragOver {
+                dragOverlay
+            }
+
+            // Upload banner (non-blocking)
+            if !uploadManager.items.isEmpty {
+                UploadBanner(uploadManager: uploadManager) {
+                    refreshFiles()
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 16)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: uploadManager.items.isEmpty)
+        .onDrop(of: [.fileURL], isTargeted: $isDragOver) { providers in
+            handleDrop(providers: providers)
+            return true
         }
         .onAppear {
             // Load files when view appears
@@ -169,6 +194,25 @@ struct FileBrowserView: View {
                 .toggleStyle(.switch)
                 .controlSize(.small)
 
+            // Upload button
+            Button {
+                showUploadPicker()
+            } label: {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .buttonStyle(.plain)
+            .frame(width: 28, height: 28)
+            .background {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                    }
+            }
+            .help("Upload files")
+
             // Refresh button
             Button {
                 refreshFiles()
@@ -186,6 +230,7 @@ struct FileBrowserView: View {
                             .stroke(Color.white.opacity(0.1), lineWidth: 1)
                     }
             }
+            .help("Refresh")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -227,6 +272,14 @@ struct FileBrowserView: View {
 
                         Divider()
 
+                        Button {
+                            showUploadPicker()
+                        } label: {
+                            Label("Upload Files or Folder...", systemImage: "square.and.arrow.up")
+                        }
+
+                        Divider()
+
                         Button("Delete", role: .destructive) {
                             deleteFile(file)
                         }
@@ -235,6 +288,22 @@ struct FileBrowserView: View {
             }
             .padding(.horizontal, 24)
             .padding(.vertical, 12)
+        }
+        .contextMenu {
+            // Context menu for empty space / background
+            Button {
+                showUploadPicker()
+            } label: {
+                Label("Upload Files or Folder...", systemImage: "square.and.arrow.up")
+            }
+
+            Divider()
+
+            Button {
+                refreshFiles()
+            } label: {
+                Label("Refresh", systemImage: "arrow.clockwise")
+            }
         }
     }
 
@@ -409,6 +478,87 @@ struct FileBrowserView: View {
                 showErrorAlert = true
             }
         }
+    }
+
+    // MARK: - Upload
+
+    private func showUploadPicker() {
+        guard let server = serverManager.selectedServer else { return }
+
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true  // Enable folder selection
+        panel.allowsMultipleSelection = true
+        panel.message = "Select files or folders to upload to \(serverManager.currentPath)"
+        panel.prompt = "Upload"
+
+        panel.begin { response in
+            guard response == .OK, !panel.urls.isEmpty else { return }
+            let ssh = serverManager.sshService(for: server)
+            uploadManager.queueUpload(
+                urls: panel.urls,
+                remotePath: serverManager.currentPath,
+                ssh: ssh
+            )
+        }
+    }
+
+    private func handleDrop(providers: [NSItemProvider]) {
+        guard let server = serverManager.selectedServer else { return }
+
+        var urls: [URL] = []
+        let group = DispatchGroup()
+
+        for provider in providers {
+            group.enter()
+            provider.loadItem(forTypeIdentifier: "public.file-url", options: nil) { item, _ in
+                defer { group.leave() }
+                if let data = item as? Data,
+                   let urlString = String(data: data, encoding: .utf8),
+                   let url = URL(string: urlString) {
+                    urls.append(url)
+                }
+            }
+        }
+
+        group.notify(queue: .main) {
+            if !urls.isEmpty {
+                let ssh = self.serverManager.sshService(for: server)
+                self.uploadManager.queueUpload(
+                    urls: urls,
+                    remotePath: self.serverManager.currentPath,
+                    ssh: ssh
+                )
+            }
+        }
+    }
+
+    // MARK: - Overlays
+
+    private var dragOverlay: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.accentColor.opacity(0.1))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [8, 4]))
+                }
+
+            VStack(spacing: 12) {
+                Image(systemName: "square.and.arrow.down")
+                    .font(.system(size: 48))
+                    .foregroundColor(.accentColor)
+
+                Text("Drop files or folders to upload")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundColor(.primary)
+
+                Text("Will be uploaded to \(serverManager.currentPath)")
+                    .font(.system(size: 13))
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(24)
     }
 }
 

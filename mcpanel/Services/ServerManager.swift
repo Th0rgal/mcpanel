@@ -870,15 +870,25 @@ class ServerManager: ObservableObject {
         ptyConsumers[serverId] = consumers
         cancelPendingPTYDisconnect(for: serverId)
 
+        print("[ServerManager] acquirePTY called for server: \(server.name), consumer: \(consumer), existing consumers: \(consumers)")
+
         // Log tail mode doesn't use PTY; just refresh console output.
         if server.consoleMode == .logTail {
+            print("[ServerManager] Using logTail mode, not connecting PTY")
             await loadConsole(for: server)
             return
         }
 
         // Only connect if we aren't already connected.
-        if ptyConnected[serverId] != true || ptyServices[serverId] == nil {
+        let isConnected = ptyConnected[serverId] == true
+        let hasService = ptyServices[serverId] != nil
+        print("[ServerManager] PTY state: isConnected=\(isConnected), hasService=\(hasService)")
+
+        if !isConnected || !hasService {
+            print("[ServerManager] Connecting PTY...")
             await connectPTY(for: server)
+        } else {
+            print("[ServerManager] PTY already connected, reusing existing connection")
         }
     }
 
@@ -1416,11 +1426,13 @@ class ServerManager: ObservableObject {
 
     /// Register a callback to receive raw PTY output (for SwiftTerm)
     func registerPTYOutputCallback(for server: Server, callback: @escaping (String) -> Void) {
+        print("[ServerManager] Registering PTY output callback for server: \(server.name) (\(server.id))")
         ptyOutputCallbacks[server.id] = callback
     }
 
     /// Unregister PTY output callback
     func unregisterPTYOutputCallback(for server: Server) {
+        print("[ServerManager] Unregistering PTY output callback for server: \(server.name) (\(server.id))")
         ptyOutputCallbacks.removeValue(forKey: server.id)
     }
 
