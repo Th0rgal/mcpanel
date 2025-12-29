@@ -176,6 +176,15 @@ actor SSHService {
                     continuation.finish()
                 }
 
+                // Handle stream cancellation (consumer stops iterating early)
+                continuation.onTermination = { @Sendable _ in
+                    outputPipe.fileHandleForReading.readabilityHandler = nil
+                    if process.isRunning {
+                        process.terminate()
+                    }
+                    stopAccessing()  // Release security-scoped resource on cancellation
+                }
+
                 do {
                     try process.run()
                 } catch {
