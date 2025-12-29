@@ -506,6 +506,8 @@ struct FileBrowserView: View {
     private func handleDrop(providers: [NSItemProvider]) {
         guard let server = serverManager.selectedServer else { return }
 
+        // Use a lock to protect concurrent access to the urls array
+        let lock = NSLock()
         var urls: [URL] = []
         let group = DispatchGroup()
 
@@ -516,7 +518,9 @@ struct FileBrowserView: View {
                 if let data = item as? Data,
                    let urlString = String(data: data, encoding: .utf8),
                    let url = URL(string: urlString) {
+                    lock.lock()
                     urls.append(url)
+                    lock.unlock()
                 }
             }
         }

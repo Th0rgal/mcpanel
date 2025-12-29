@@ -16,6 +16,7 @@ struct UploadItem: Identifiable {
     let remotePath: String
     let fileName: String
     let fileSize: Int64
+    let securityScopedBookmark: Data?  // Store bookmark for sandbox access
     var bytesUploaded: Int64 = 0
     var status: UploadStatus = .pending
 
@@ -85,8 +86,8 @@ class UploadManager: ObservableObject {
     // MARK: - Public Methods
 
     func queueUpload(urls: [URL], remotePath: String, ssh: SSHService) {
-        // Collect all files (including from folders)
-        var filesToUpload: [(url: URL, relativePath: String)] = []
+        // Collect all files (including from folders) with their bookmarks
+        var filesToUpload: [(url: URL, relativePath: String, bookmark: Data?)] = []
 
         for url in urls {
             // Start accessing security-scoped resource
@@ -100,16 +101,18 @@ class UploadManager: ObservableObject {
             var isDirectory: ObjCBool = false
             if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) {
                 if isDirectory.boolValue {
-                    // Recursively collect files from folder
+                    // Recursively collect files from folder, creating bookmarks for each
                     collectFiles(from: url, basePath: url.deletingLastPathComponent().path, into: &filesToUpload)
                 } else {
-                    filesToUpload.append((url, url.lastPathComponent))
+                    // Create bookmark for single file
+                    let bookmark = try? url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+                    filesToUpload.append((url, url.lastPathComponent, bookmark))
                 }
             }
         }
 
-        // Create upload items
-        for (url, relativePath) in filesToUpload {
+        // Create upload items with bookmarks for later access
+        for (url, relativePath, bookmark) in filesToUpload {
             let fileSize = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0
             let fullRemotePath = (remotePath as NSString).appendingPathComponent(relativePath)
 
@@ -117,7 +120,8 @@ class UploadManager: ObservableObject {
                 localURL: url,
                 remotePath: fullRemotePath,
                 fileName: relativePath,
-                fileSize: fileSize
+                fileSize: fileSize,
+                securityScopedBookmark: bookmark
             )
             items.append(item)
         }
@@ -151,7 +155,7 @@ class UploadManager: ObservableObject {
 
     // MARK: - Private Methods
 
-    private func collectFiles(from folderURL: URL, basePath: String, into files: inout [(url: URL, relativePath: String)]) {
+    private func collectFiles(from folderURL: URL, basePath: String, into files: inout [(url: URL, relativePath: String, bookmark: Data?)]) {
         guard let enumerator = FileManager.default.enumerator(
             at: folderURL,
             includingPropertiesForKeys: [.isRegularFileKey],
@@ -163,7 +167,9 @@ class UploadManager: ObservableObject {
             if FileManager.default.fileExists(atPath: fileURL.path, isDirectory: &isDirectory), !isDirectory.boolValue {
                 // Calculate relative path from base
                 let relativePath = String(fileURL.path.dropFirst(basePath.count + 1))
-                files.append((fileURL, relativePath))
+                // Create security-scoped bookmark for each file while we have folder access
+                let bookmark = try? fileURL.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+                files.append((fileURL, relativePath, bookmark))
             }
         }
     }
@@ -181,23 +187,47 @@ class UploadManager: ObservableObject {
                 items[i].status = .uploading
 
                 do {
-                    // Start accessing security-scoped resource
-                    let accessing = items[i].localURL.startAccessingSecurityScopedResource()
-                    defer {
-                        if accessing {
-                            items[i].localURL.stopAccessingSecurityScopedResource()
+                    // Try to resolve bookmark first, fall back to direct URL access
+                    var accessedURL: URL? = nil
+                    var stopAccessing: (() -> Void)? = nil
+
+                    if let bookmark = items[i].securityScopedBookmark {
+                        var isStale = false
+                        if let url = try? URL(resolvingBookmarkData: bookmark, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale) {
+                            if url.startAccessingSecurityScopedResource() {
+                                accessedURL = url
+                                stopAccessing = { url.stopAccessingSecurityScopedResource() }
+                            }
                         }
                     }
 
-                    // Create parent directory if needed
+                    // Fall back to direct URL if bookmark failed
+                    if accessedURL == nil {
+                        let url = items[i].localURL
+                        if url.startAccessingSecurityScopedResource() {
+                            accessedURL = url
+                            stopAccessing = { url.stopAccessingSecurityScopedResource() }
+                        }
+                    }
+
+                    defer {
+                        stopAccessing?()
+                    }
+
+                    guard let fileURL = accessedURL else {
+                        throw NSError(domain: "UploadManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "Cannot access file"])
+                    }
+
+                    // Create parent directory if needed (escape path for shell safety)
                     let parentDir = (items[i].remotePath as NSString).deletingLastPathComponent
                     if parentDir != "/" && !parentDir.isEmpty {
-                        _ = try? await ssh.execute("mkdir -p '\(parentDir)'")
+                        let escapedPath = escapeShellPath(parentDir)
+                        _ = try? await ssh.execute("mkdir -p \(escapedPath)")
                     }
 
                     // Upload with progress tracking
                     try await uploadWithProgress(
-                        localPath: items[i].localURL.path,
+                        localPath: fileURL.path,
                         remotePath: items[i].remotePath,
                         ssh: ssh,
                         itemIndex: i
@@ -214,6 +244,13 @@ class UploadManager: ObservableObject {
 
             isUploading = false
         }
+    }
+
+    /// Escapes a path for safe use in shell commands
+    private func escapeShellPath(_ path: String) -> String {
+        // Replace single quotes with '\'' (end quote, escaped quote, start quote)
+        let escaped = path.replacingOccurrences(of: "'", with: "'\\''")
+        return "'\(escaped)'"
     }
 
     private func uploadWithProgress(localPath: String, remotePath: String, ssh: SSHService, itemIndex: Int) async throws {
