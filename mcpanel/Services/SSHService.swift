@@ -154,6 +154,28 @@ actor SSHService {
             Task {
                 let (sshCommand, stopAccessing) = buildSSHCommand(remoteCommand: command)
 
+                // Use a class wrapper to ensure stopAccessing is only called once
+                // (terminationHandler and onTermination can both fire)
+                final class CleanupGuard: @unchecked Sendable {
+                    private var didCleanup = false
+                    private let lock = NSLock()
+                    private let stopAccessing: () -> Void
+
+                    init(_ stopAccessing: @escaping () -> Void) {
+                        self.stopAccessing = stopAccessing
+                    }
+
+                    func cleanup() {
+                        lock.lock()
+                        defer { lock.unlock() }
+                        guard !didCleanup else { return }
+                        didCleanup = true
+                        stopAccessing()
+                    }
+                }
+
+                let cleanupGuard = CleanupGuard(stopAccessing)
+
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
                 process.arguments = sshCommand
@@ -172,7 +194,7 @@ actor SSHService {
 
                 process.terminationHandler = { _ in
                     outputPipe.fileHandleForReading.readabilityHandler = nil
-                    stopAccessing()  // Release security-scoped resource when process ends
+                    cleanupGuard.cleanup()
                     continuation.finish()
                 }
 
@@ -182,13 +204,13 @@ actor SSHService {
                     if process.isRunning {
                         process.terminate()
                     }
-                    stopAccessing()  // Release security-scoped resource on cancellation
+                    cleanupGuard.cleanup()
                 }
 
                 do {
                     try process.run()
                 } catch {
-                    stopAccessing()  // Release on error too
+                    cleanupGuard.cleanup()
                     continuation.finish()
                 }
             }
@@ -508,12 +530,15 @@ extension SSHService {
 
     /// Upload a file via scp
     func uploadFile(localPath: String, remotePath: String) async throws {
+        // Resolve SSH key path using security-scoped bookmark if available
+        let (keyPath, stopAccessing) = server.resolveSSHKeyPath()
+        defer { stopAccessing() }
+
         var args: [String] = []
 
         // Add identity file if specified
-        if let identityFile = server.identityFilePath, !identityFile.isEmpty {
-            let expandedPath = NSString(string: identityFile).expandingTildeInPath
-            args.append(contentsOf: ["-i", expandedPath])
+        if let path = keyPath {
+            args.append(contentsOf: ["-i", path])
         }
 
         // SCP options
@@ -583,12 +608,15 @@ extension SSHService {
     }
 
     func downloadFile(remotePath: String, localPath: String) async throws {
+        // Resolve SSH key path using security-scoped bookmark if available
+        let (keyPath, stopAccessing) = server.resolveSSHKeyPath()
+        defer { stopAccessing() }
+
         var args: [String] = []
 
         // Add identity file if specified
-        if let identityFile = server.identityFilePath, !identityFile.isEmpty {
-            let expandedPath = NSString(string: identityFile).expandingTildeInPath
-            args.append(contentsOf: ["-i", expandedPath])
+        if let path = keyPath {
+            args.append(contentsOf: ["-i", path])
         }
 
         // SCP options
@@ -626,12 +654,15 @@ extension SSHService {
 
     /// Download a directory recursively via scp -r
     func downloadDirectory(remotePath: String, localPath: String) async throws {
+        // Resolve SSH key path using security-scoped bookmark if available
+        let (keyPath, stopAccessing) = server.resolveSSHKeyPath()
+        defer { stopAccessing() }
+
         var args: [String] = []
 
         // Add identity file if specified
-        if let identityFile = server.identityFilePath, !identityFile.isEmpty {
-            let expandedPath = NSString(string: identityFile).expandingTildeInPath
-            args.append(contentsOf: ["-i", expandedPath])
+        if let path = keyPath {
+            args.append(contentsOf: ["-i", path])
         }
 
         // SCP options with recursive flag
