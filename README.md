@@ -151,5 +151,5 @@ mcpanel/
 ---
 
 <p align="center">
-  Made with SwiftUI for macOS
+  <sub>Created by <a href="https://thomas.md">Th0rgal</a> • Also check out <a href="https://oraxen.com">Oraxen</a>, <a href="https://mcserverjars.com">MCServerJars</a>, and <a href="https://hackedserver.org">HackedServer</a></sub>
 </p>
