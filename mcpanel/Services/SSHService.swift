@@ -188,15 +188,17 @@ actor SSHService {
     private func buildSSHCommand(remoteCommand: String) -> [String] {
         var args: [String] = []
 
-        // Add identity file if specified
-        if let identityFile = server.identityFilePath, !identityFile.isEmpty {
-            let expandedPath = NSString(string: identityFile).expandingTildeInPath
-            args.append(contentsOf: ["-i", expandedPath])
+        // Resolve SSH key path using security-scoped bookmark if available
+        let (keyPath, _) = server.resolveSSHKeyPath()
+        if let path = keyPath {
+            args.append(contentsOf: ["-i", path])
         }
 
         // SSH options for non-interactive use
         // Use ControlMaster to share SSH connections and avoid rate limiting
-        let controlPath = "/tmp/mcpanel-ssh-\(server.host)-\(server.sshUsername)"
+        // Use app's temp directory for sandbox compatibility
+        let tempDir = FileManager.default.temporaryDirectory.path
+        let controlPath = "\(tempDir)/mcpanel-ssh-\(server.host)-\(server.sshUsername)"
         args.append(contentsOf: [
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=10",

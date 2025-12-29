@@ -311,6 +311,7 @@ struct ServerSettingsView: View {
     @State private var sshPort: String = ""
     @State private var username: String = ""
     @State private var identityFile: String = ""
+    @State private var sshKeyBookmark: Data?
     @State private var serverPath: String = ""
     @State private var systemdUnit: String = ""
     @State private var screenSession: String = ""
@@ -326,7 +327,12 @@ struct ServerSettingsView: View {
                     SettingsField(label: "Host", text: $host)
                     SettingsField(label: "SSH Port", text: $sshPort)
                     SettingsField(label: "Username", text: $username)
-                    SettingsField(label: "SSH Key Path", text: $identityFile)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("SSH Key")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.secondary)
+                        SSHKeyPicker(keyPath: $identityFile, keyBookmark: $sshKeyBookmark)
+                    }
                 }
 
                 // Server settings
@@ -378,6 +384,7 @@ struct ServerSettingsView: View {
                         updated.sshPort = Int(sshPort) ?? 22
                         updated.sshUsername = username
                         updated.identityFilePath = identityFile.isEmpty ? nil : identityFile
+                        updated.sshKeyBookmark = sshKeyBookmark
                         updated.serverPath = serverPath
                         updated.systemdUnit = systemdUnit.isEmpty ? nil : systemdUnit
                         updated.screenSession = screenSession.isEmpty ? nil : screenSession
@@ -399,6 +406,7 @@ struct ServerSettingsView: View {
             sshPort = String(server.sshPort)
             username = server.sshUsername
             identityFile = server.identityFilePath ?? ""
+            sshKeyBookmark = server.sshKeyBookmark
             serverPath = server.serverPath
             systemdUnit = server.systemdUnit ?? ""
             screenSession = server.screenSession ?? ""

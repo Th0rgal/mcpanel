@@ -130,6 +130,7 @@ struct Server: Identifiable, Codable, Hashable {
     var sshPort: Int
     var sshUsername: String
     var identityFilePath: String?  // Path to SSH key (nil = use password)
+    var sshKeyBookmark: Data?      // Security-scoped bookmark for sandbox access to SSH key
     var serverPath: String         // e.g., /root/minecraft/paper-1.21
     var pluginsPath: String?       // e.g., /root/minecraft/paper-1.21/plugins
     var jarFileName: String        // e.g., paper.jar
@@ -188,6 +189,7 @@ struct Server: Identifiable, Codable, Hashable {
         sshPort: Int = 22,
         sshUsername: String = "root",
         identityFilePath: String? = nil,
+        sshKeyBookmark: Data? = nil,
         serverPath: String,
         pluginsPath: String? = nil,
         jarFileName: String = "server.jar",
@@ -208,6 +210,7 @@ struct Server: Identifiable, Codable, Hashable {
         self.sshPort = sshPort
         self.sshUsername = sshUsername
         self.identityFilePath = identityFilePath
+        self.sshKeyBookmark = sshKeyBookmark
         self.serverPath = serverPath
         self.pluginsPath = pluginsPath
         self.jarFileName = jarFileName
@@ -226,7 +229,7 @@ struct Server: Identifiable, Codable, Hashable {
     // MARK: - Codable
 
     enum CodingKeys: String, CodingKey {
-        case id, name, host, sshPort, sshUsername, identityFilePath
+        case id, name, host, sshPort, sshUsername, identityFilePath, sshKeyBookmark
         case serverPath, pluginsPath, jarFileName
         case rconHost, rconPort, rconPassword, screenSession, tmuxSession, systemdUnit
         case serverType, consoleMode, minecraftVersion, dateAdded
@@ -240,6 +243,52 @@ struct Server: Identifiable, Codable, Hashable {
 
     static func == (lhs: Server, rhs: Server) -> Bool {
         lhs.id == rhs.id
+    }
+
+    // MARK: - SSH Key Access
+
+    /// Resolve the SSH key path, using security-scoped bookmark if available
+    /// Returns the path and a closure to stop accessing the resource when done
+    func resolveSSHKeyPath() -> (path: String?, stopAccessing: () -> Void) {
+        // Try to resolve from bookmark first (for sandbox access)
+        if let bookmark = sshKeyBookmark {
+            var isStale = false
+            do {
+                let url = try URL(
+                    resolvingBookmarkData: bookmark,
+                    options: .withSecurityScope,
+                    relativeTo: nil,
+                    bookmarkDataIsStale: &isStale
+                )
+                if url.startAccessingSecurityScopedResource() {
+                    return (url.path, { url.stopAccessingSecurityScopedResource() })
+                }
+            } catch {
+                print("[Server] Failed to resolve SSH key bookmark: \(error)")
+            }
+        }
+
+        // Fall back to direct path (works outside sandbox or for system SSH keys)
+        if let path = identityFilePath, !path.isEmpty {
+            let expandedPath = NSString(string: path).expandingTildeInPath
+            return (expandedPath, { })
+        }
+
+        return (nil, { })
+    }
+
+    /// Create a security-scoped bookmark for an SSH key file
+    static func createSSHKeyBookmark(for url: URL) -> Data? {
+        do {
+            return try url.bookmarkData(
+                options: .withSecurityScope,
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            )
+        } catch {
+            print("[Server] Failed to create SSH key bookmark: \(error)")
+            return nil
+        }
     }
 }
 

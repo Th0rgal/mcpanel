@@ -214,10 +214,10 @@ actor PTYService {
         // Force PTY allocation (critical for interactive sessions)
         args.append("-tt")
 
-        // Add identity file if specified
-        if let identityFile = server.identityFilePath, !identityFile.isEmpty {
-            let expandedPath = NSString(string: identityFile).expandingTildeInPath
-            args.append(contentsOf: ["-i", expandedPath])
+        // Resolve SSH key path using security-scoped bookmark if available
+        let (keyPath, _) = server.resolveSSHKeyPath()
+        if let path = keyPath {
+            args.append(contentsOf: ["-i", path])
         }
 
         // SSH options for interactive use
@@ -453,9 +453,10 @@ actor PTYService {
 
         var args: [String] = []
 
-        if let identityFile = server.identityFilePath, !identityFile.isEmpty {
-            let expandedPath = NSString(string: identityFile).expandingTildeInPath
-            args.append(contentsOf: ["-i", expandedPath])
+        // Resolve SSH key path using security-scoped bookmark if available
+        let (keyPath, _) = server.resolveSSHKeyPath()
+        if let path = keyPath {
+            args.append(contentsOf: ["-i", path])
         }
 
         args.append(contentsOf: [
