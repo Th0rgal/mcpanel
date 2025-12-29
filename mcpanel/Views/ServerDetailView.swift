@@ -321,6 +321,26 @@ struct ServerSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
+                // SSH Key reauthorization warning (shown when key path exists but no bookmark)
+                if server.needsSSHKeyReauthorization {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.yellow)
+                        Text("SSH key needs to be re-selected for App Store version compatibility. Please use the Browse button below to re-select your SSH key.")
+                            .font(.system(size: 12))
+                            .foregroundColor(.white.opacity(0.8))
+                    }
+                    .padding(12)
+                    .background {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.yellow.opacity(0.15))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .stroke(Color.yellow.opacity(0.3), lineWidth: 1)
+                            }
+                    }
+                }
+
                 // Connection settings
                 SettingsSection(title: "Connection") {
                     SettingsField(label: "Server Name", text: $name)

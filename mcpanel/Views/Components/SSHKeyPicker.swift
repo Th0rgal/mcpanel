@@ -50,7 +50,22 @@ struct SSHKeyPicker: View {
         panel.showsHiddenFiles = true
 
         // Start in ~/.ssh/ if it exists
-        let sshDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ssh")
+        // In sandbox mode, homeDirectoryForCurrentUser returns container home,
+        // so we need to get the real user home from the path
+        let realHomeDir: URL
+        let homeDir = FileManager.default.homeDirectoryForCurrentUser
+        if homeDir.path.contains("/Library/Containers/") {
+            // Extract real home from container path: /Users/name/Library/Containers/...
+            if let range = homeDir.path.range(of: "/Library/Containers/") {
+                let realPath = String(homeDir.path[..<range.lowerBound])
+                realHomeDir = URL(fileURLWithPath: realPath)
+            } else {
+                realHomeDir = homeDir
+            }
+        } else {
+            realHomeDir = homeDir
+        }
+        let sshDir = realHomeDir.appendingPathComponent(".ssh")
         if FileManager.default.fileExists(atPath: sshDir.path) {
             panel.directoryURL = sshDir
         }

@@ -247,6 +247,15 @@ struct Server: Identifiable, Codable, Hashable {
 
     // MARK: - SSH Key Access
 
+    /// Check if SSH key is configured but missing security-scoped bookmark
+    /// This indicates the user needs to re-select their SSH key for sandbox compatibility
+    var needsSSHKeyReauthorization: Bool {
+        guard let path = identityFilePath, !path.isEmpty else {
+            return false  // No SSH key configured
+        }
+        return sshKeyBookmark == nil
+    }
+
     /// Resolve the SSH key path, using security-scoped bookmark if available
     /// Returns the path and a closure to stop accessing the resource when done
     func resolveSSHKeyPath() -> (path: String?, stopAccessing: () -> Void) {
