@@ -87,6 +87,8 @@ actor PTYService {
     deinit {
         // Clean up process on dealloc
         process?.terminate()
+        // Release security-scoped SSH key access if still held
+        sshKeyStopAccessing?()
     }
 
     // MARK: - Session Detection
