@@ -9,7 +9,21 @@ import Foundation
 
 actor PersistenceService {
     private let serversFileName = "servers.json"
-    private static var hasMigrated = false
+    // Thread-safe migration flag using OSAtomicCompareAndSwapInt
+    private static let migrationLock = NSLock()
+    private static var _hasMigrated = false
+    private static var hasMigrated: Bool {
+        get {
+            migrationLock.lock()
+            defer { migrationLock.unlock() }
+            return _hasMigrated
+        }
+        set {
+            migrationLock.lock()
+            defer { migrationLock.unlock() }
+            _hasMigrated = newValue
+        }
+    }
 
     private var appFolder: URL {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
