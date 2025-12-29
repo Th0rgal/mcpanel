@@ -54,7 +54,8 @@ struct OnboardingView: View {
     @State private var host = ""
     @State private var sshPort = "22"
     @State private var sshUsername = "root"
-    @State private var identityFilePath = "~/.ssh/id_rsa"
+    @State private var identityFilePath = ""
+    @State private var sshKeyBookmark: Data?
     @State private var serverPath = "/home/minecraft"
     @State private var screenSession = ""
     @State private var systemdUnit = ""
@@ -344,12 +345,17 @@ struct OnboardingView: View {
                         icon: "person.fill"
                     )
 
-                    OnboardingTextField(
-                        label: "SSH Key Path",
-                        placeholder: "~/.ssh/id_rsa",
-                        text: $identityFilePath,
-                        icon: "key.fill"
-                    )
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "key.fill")
+                                .font(.system(size: 14))
+                                .foregroundStyle(.secondary)
+                            Text("SSH Key")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(.secondary)
+                        }
+                        SSHKeyPicker(keyPath: $identityFilePath, keyBookmark: $sshKeyBookmark)
+                    }
                 }
 
                 // Connection test
@@ -699,6 +705,7 @@ struct OnboardingView: View {
                 sshPort: Int(sshPort) ?? 22,
                 sshUsername: sshUsername,
                 identityFilePath: identityFilePath.isEmpty ? nil : identityFilePath,
+                sshKeyBookmark: sshKeyBookmark,
                 serverPath: serverPath
             )
 
@@ -724,6 +731,7 @@ struct OnboardingView: View {
             sshPort: Int(sshPort) ?? 22,
             sshUsername: sshUsername,
             identityFilePath: identityFilePath.isEmpty ? nil : identityFilePath,
+            sshKeyBookmark: sshKeyBookmark,
             serverPath: serverPath,
             screenSession: screenSession.isEmpty ? nil : screenSession,
             systemdUnit: systemdUnit.isEmpty ? nil : systemdUnit,

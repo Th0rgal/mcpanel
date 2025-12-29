@@ -74,6 +74,7 @@ actor PTYService {
     private var isConnected = false
     private var sessionType: SessionType = .direct
     private var sessionName: String?
+    private var sshKeyStopAccessing: (() -> Void)?  // Release security-scoped resource
 
     // Terminal dimensions
     private var termWidth: Int = 120
@@ -86,6 +87,8 @@ actor PTYService {
     deinit {
         // Clean up process on dealloc
         process?.terminate()
+        // Release security-scoped SSH key access if still held
+        sshKeyStopAccessing?()
     }
 
     // MARK: - Session Detection
@@ -214,10 +217,11 @@ actor PTYService {
         // Force PTY allocation (critical for interactive sessions)
         args.append("-tt")
 
-        // Add identity file if specified
-        if let identityFile = server.identityFilePath, !identityFile.isEmpty {
-            let expandedPath = NSString(string: identityFile).expandingTildeInPath
-            args.append(contentsOf: ["-i", expandedPath])
+        // Resolve SSH key path using security-scoped bookmark if available
+        let (keyPath, stopAccessing) = server.resolveSSHKeyPath()
+        self.sshKeyStopAccessing = stopAccessing
+        if let path = keyPath {
+            args.append(contentsOf: ["-i", path])
         }
 
         // SSH options for interactive use
@@ -250,6 +254,9 @@ actor PTYService {
         var master: Int32 = 0
         var slave: Int32 = 0
         if openpty(&master, &slave, nil, nil, nil) != 0 {
+            // Release security-scoped resource before throwing
+            sshKeyStopAccessing?()
+            sshKeyStopAccessing = nil
             throw PTYError.connectionFailed("Failed to allocate PTY")
         }
 
@@ -282,6 +289,9 @@ actor PTYService {
             self.slaveFD = nil
             self.masterHandle = nil
             self.slaveHandle = nil
+            // Release security-scoped resource on error
+            sshKeyStopAccessing?()
+            sshKeyStopAccessing = nil
             throw PTYError.connectionFailed(error.localizedDescription)
         }
     }
@@ -304,6 +314,10 @@ actor PTYService {
         slaveFD = nil
         masterHandle = nil
         slaveHandle = nil
+
+        // Release security-scoped SSH key access
+        sshKeyStopAccessing?()
+        sshKeyStopAccessing = nil
     }
 
     // MARK: - I/O Operations
@@ -453,9 +467,11 @@ actor PTYService {
 
         var args: [String] = []
 
-        if let identityFile = server.identityFilePath, !identityFile.isEmpty {
-            let expandedPath = NSString(string: identityFile).expandingTildeInPath
-            args.append(contentsOf: ["-i", expandedPath])
+        // Resolve SSH key path using security-scoped bookmark if available
+        let (keyPath, stopAccessing) = server.resolveSSHKeyPath()
+        defer { stopAccessing() }
+        if let path = keyPath {
+            args.append(contentsOf: ["-i", path])
         }
 
         args.append(contentsOf: [

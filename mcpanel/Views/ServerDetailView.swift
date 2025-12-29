@@ -311,6 +311,7 @@ struct ServerSettingsView: View {
     @State private var sshPort: String = ""
     @State private var username: String = ""
     @State private var identityFile: String = ""
+    @State private var sshKeyBookmark: Data?
     @State private var serverPath: String = ""
     @State private var systemdUnit: String = ""
     @State private var screenSession: String = ""
@@ -320,13 +321,38 @@ struct ServerSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
+                // SSH Key reauthorization warning (shown when key path exists but no bookmark)
+                if server.needsSSHKeyReauthorization {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.yellow)
+                        Text("SSH key needs to be re-selected for App Store version compatibility. Please use the Browse button below to re-select your SSH key.")
+                            .font(.system(size: 12))
+                            .foregroundColor(.white.opacity(0.8))
+                    }
+                    .padding(12)
+                    .background {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.yellow.opacity(0.15))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .stroke(Color.yellow.opacity(0.3), lineWidth: 1)
+                            }
+                    }
+                }
+
                 // Connection settings
                 SettingsSection(title: "Connection") {
                     SettingsField(label: "Server Name", text: $name)
                     SettingsField(label: "Host", text: $host)
                     SettingsField(label: "SSH Port", text: $sshPort)
                     SettingsField(label: "Username", text: $username)
-                    SettingsField(label: "SSH Key Path", text: $identityFile)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("SSH Key")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.secondary)
+                        SSHKeyPicker(keyPath: $identityFile, keyBookmark: $sshKeyBookmark)
+                    }
                 }
 
                 // Server settings
@@ -378,6 +404,7 @@ struct ServerSettingsView: View {
                         updated.sshPort = Int(sshPort) ?? 22
                         updated.sshUsername = username
                         updated.identityFilePath = identityFile.isEmpty ? nil : identityFile
+                        updated.sshKeyBookmark = sshKeyBookmark
                         updated.serverPath = serverPath
                         updated.systemdUnit = systemdUnit.isEmpty ? nil : systemdUnit
                         updated.screenSession = screenSession.isEmpty ? nil : screenSession
@@ -399,6 +426,7 @@ struct ServerSettingsView: View {
             sshPort = String(server.sshPort)
             username = server.sshUsername
             identityFile = server.identityFilePath ?? ""
+            sshKeyBookmark = server.sshKeyBookmark
             serverPath = server.serverPath
             systemdUnit = server.systemdUnit ?? ""
             screenSession = server.screenSession ?? ""

@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		02BD68F2DFD8DC00659644A3 /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA235DB2F72F473B056E093 /* SidebarView.swift */; };
+		SSHKP001B98121108B3429D /* SSHKeyPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSHKP002BADA9185D7DD9238 /* SSHKeyPicker.swift */; };
 		057CDE99274D2C2021DC3047 /* FileBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFB3F75DB913477CD55D551A /* FileBrowserView.swift */; };
 		0BD349D1CBB25FED6D6AF1E2 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07E23A41816FB78B9F8E32B2 /* OnboardingView.swift */; };
 		14D97865F7D52960502559AE /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC7E4E6E97C4FAAC088AA1BC /* ContentView.swift */; };
@@ -41,6 +42,7 @@
 
 /* Begin PBXFileReference section */
 		07E23A41816FB78B9F8E32B2 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
+		SSHKP002BADA9185D7DD9238 /* SSHKeyPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHKeyPicker.swift; sourceTree = "<group>"; };
 		095D675237267A09B7AF57D3 /* ConsoleMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConsoleMessage.swift; sourceTree = "<group>"; };
 		0D0BBA060F926AEF7FC80F02 /* PersistenceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceService.swift; sourceTree = "<group>"; };
 		18D7C4F92CD35E4D8F6BA92D /* SSHService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHService.swift; sourceTree = "<group>"; };
@@ -167,6 +169,7 @@
 				DEA3D631611E8A84E911FDE1 /* CommandDebugPanel.swift */,
 				C7BFF4421FDDCD4402B0494B /* CommandInputBar.swift */,
 				77B77641EE98946C58B15329 /* GlassBackground.swift */,
+				SSHKP002BADA9185D7DD9238 /* SSHKeyPicker.swift */,
 				C6DA3C390029F86E3057C257 /* WindowStateObserver.swift */,
 			);
 			path = Components;
@@ -269,6 +272,7 @@
 				8CC3763F4867F8BEBBA4BCA2 /* Plugin.swift in Sources */,
 				CC252D43AED80BED98734CBF /* PluginsView.swift in Sources */,
 				ED651AE016FC1AF3B3E22927 /* SSHService.swift in Sources */,
+				SSHKP001B98121108B3429D /* SSHKeyPicker.swift in Sources */,
 				4598D88D7EBC8023F929F1B4 /* Server.swift in Sources */,
 				CBDA2EA0C38704143E7EEECA /* ServerDetailView.swift in Sources */,
 				D02532A3F5C5730B9084A884 /* ServerManager.swift in Sources */,

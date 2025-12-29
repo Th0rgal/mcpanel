@@ -49,7 +49,8 @@ actor SSHService {
     // MARK: - Command Execution
 
     func execute(_ command: String, timeout: TimeInterval = 30) async throws -> String {
-        let sshCommand = buildSSHCommand(remoteCommand: command)
+        let (sshCommand, stopAccessing) = buildSSHCommand(remoteCommand: command)
+        defer { stopAccessing() }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
@@ -151,7 +152,29 @@ actor SSHService {
     func stream(_ command: String) -> AsyncStream<String> {
         AsyncStream { continuation in
             Task {
-                let sshCommand = buildSSHCommand(remoteCommand: command)
+                let (sshCommand, stopAccessing) = buildSSHCommand(remoteCommand: command)
+
+                // Use a class wrapper to ensure stopAccessing is only called once
+                // (terminationHandler and onTermination can both fire)
+                final class CleanupGuard: @unchecked Sendable {
+                    private var didCleanup = false
+                    private let lock = NSLock()
+                    private let stopAccessing: () -> Void
+
+                    init(_ stopAccessing: @escaping () -> Void) {
+                        self.stopAccessing = stopAccessing
+                    }
+
+                    func cleanup() {
+                        lock.lock()
+                        defer { lock.unlock() }
+                        guard !didCleanup else { return }
+                        didCleanup = true
+                        stopAccessing()
+                    }
+                }
+
+                let cleanupGuard = CleanupGuard(stopAccessing)
 
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
@@ -171,12 +194,23 @@ actor SSHService {
 
                 process.terminationHandler = { _ in
                     outputPipe.fileHandleForReading.readabilityHandler = nil
+                    cleanupGuard.cleanup()
                     continuation.finish()
+                }
+
+                // Handle stream cancellation (consumer stops iterating early)
+                continuation.onTermination = { @Sendable _ in
+                    outputPipe.fileHandleForReading.readabilityHandler = nil
+                    if process.isRunning {
+                        process.terminate()
+                    }
+                    cleanupGuard.cleanup()
                 }
 
                 do {
                     try process.run()
                 } catch {
+                    cleanupGuard.cleanup()
                     continuation.finish()
                 }
             }
@@ -185,18 +219,21 @@ actor SSHService {
 
     // MARK: - Helper Methods
 
-    private func buildSSHCommand(remoteCommand: String) -> [String] {
+    /// Build SSH command arguments and return a closure to release security-scoped resources
+    private func buildSSHCommand(remoteCommand: String) -> (args: [String], stopAccessing: () -> Void) {
         var args: [String] = []
 
-        // Add identity file if specified
-        if let identityFile = server.identityFilePath, !identityFile.isEmpty {
-            let expandedPath = NSString(string: identityFile).expandingTildeInPath
-            args.append(contentsOf: ["-i", expandedPath])
+        // Resolve SSH key path using security-scoped bookmark if available
+        let (keyPath, stopAccessing) = server.resolveSSHKeyPath()
+        if let path = keyPath {
+            args.append(contentsOf: ["-i", path])
         }
 
         // SSH options for non-interactive use
         // Use ControlMaster to share SSH connections and avoid rate limiting
-        let controlPath = "/tmp/mcpanel-ssh-\(server.host)-\(server.sshUsername)"
+        // Use app's temp directory for sandbox compatibility
+        let tempDir = FileManager.default.temporaryDirectory.path
+        let controlPath = "\(tempDir)/mcpanel-ssh-\(server.host)-\(server.sshUsername)"
         args.append(contentsOf: [
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=10",
@@ -219,7 +256,7 @@ actor SSHService {
         // Remote command
         args.append(remoteCommand)
 
-        return args
+        return (args, stopAccessing)
     }
 }
 
@@ -493,12 +530,15 @@ extension SSHService {
 
     /// Upload a file via scp
     func uploadFile(localPath: String, remotePath: String) async throws {
+        // Resolve SSH key path using security-scoped bookmark if available
+        let (keyPath, stopAccessing) = server.resolveSSHKeyPath()
+        defer { stopAccessing() }
+
         var args: [String] = []
 
         // Add identity file if specified
-        if let identityFile = server.identityFilePath, !identityFile.isEmpty {
-            let expandedPath = NSString(string: identityFile).expandingTildeInPath
-            args.append(contentsOf: ["-i", expandedPath])
+        if let path = keyPath {
+            args.append(contentsOf: ["-i", path])
         }
 
         // SCP options
@@ -568,12 +608,15 @@ extension SSHService {
     }
 
     func downloadFile(remotePath: String, localPath: String) async throws {
+        // Resolve SSH key path using security-scoped bookmark if available
+        let (keyPath, stopAccessing) = server.resolveSSHKeyPath()
+        defer { stopAccessing() }
+
         var args: [String] = []
 
         // Add identity file if specified
-        if let identityFile = server.identityFilePath, !identityFile.isEmpty {
-            let expandedPath = NSString(string: identityFile).expandingTildeInPath
-            args.append(contentsOf: ["-i", expandedPath])
+        if let path = keyPath {
+            args.append(contentsOf: ["-i", path])
         }
 
         // SCP options
@@ -611,12 +654,15 @@ extension SSHService {
 
     /// Download a directory recursively via scp -r
     func downloadDirectory(remotePath: String, localPath: String) async throws {
+        // Resolve SSH key path using security-scoped bookmark if available
+        let (keyPath, stopAccessing) = server.resolveSSHKeyPath()
+        defer { stopAccessing() }
+
         var args: [String] = []
 
         // Add identity file if specified
-        if let identityFile = server.identityFilePath, !identityFile.isEmpty {
-            let expandedPath = NSString(string: identityFile).expandingTildeInPath
-            args.append(contentsOf: ["-i", expandedPath])
+        if let path = keyPath {
+            args.append(contentsOf: ["-i", path])
         }
 
         // SCP options with recursive flag

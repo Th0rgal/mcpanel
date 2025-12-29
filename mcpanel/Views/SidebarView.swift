@@ -313,7 +313,8 @@ struct AddServerSheet: View {
     @State private var host = ""
     @State private var sshPort = "22"
     @State private var username = "root"
-    @State private var identityFile = "~/.ssh/id_rsa"
+    @State private var identityFile = ""
+    @State private var sshKeyBookmark: Data?
     @State private var serverPath = ""
     @State private var systemdUnit = ""
     @State private var serverType: ServerType = .paper
@@ -330,7 +331,7 @@ struct AddServerSheet: View {
                         .textContentType(.URL)
                     TextField("SSH Port", text: $sshPort)
                     TextField("Username", text: $username)
-                    TextField("SSH Key Path", text: $identityFile)
+                    SSHKeyPicker(keyPath: $identityFile, keyBookmark: $sshKeyBookmark)
                 }
 
                 Section {
@@ -360,6 +361,7 @@ struct AddServerSheet: View {
                         sshPort: Int(sshPort) ?? 22,
                         sshUsername: username,
                         identityFilePath: identityFile.isEmpty ? nil : identityFile,
+                        sshKeyBookmark: sshKeyBookmark,
                         serverPath: serverPath,
                         systemdUnit: systemdUnit.isEmpty ? nil : systemdUnit,
                         serverType: serverType
