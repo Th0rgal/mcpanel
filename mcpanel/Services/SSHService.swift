@@ -231,9 +231,12 @@ actor SSHService {
 
         // SSH options for non-interactive use
         // Use ControlMaster to share SSH connections and avoid rate limiting
-        // Use app's temp directory for sandbox compatibility
-        let tempDir = FileManager.default.temporaryDirectory.path
-        let controlPath = "\(tempDir)/mcpanel-ssh-\(server.host)-\(server.sshUsername)"
+        // Use /tmp with a short hash to avoid Unix socket path length limit (~104 chars)
+        // The sandboxed container path is too long, so we use /tmp which is shared
+        let connectionId = "\(server.host)-\(server.sshUsername)-\(server.sshPort)"
+        let hash = connectionId.utf8.reduce(0) { ($0 &<< 5) &- $0 &+ Int($1) }
+        let shortHash = String(format: "%08x", abs(hash))
+        let controlPath = "/tmp/mcp-\(shortHash)"
         args.append(contentsOf: [
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=10",
