@@ -74,6 +74,7 @@ actor PTYService {
     private var isConnected = false
     private var sessionType: SessionType = .direct
     private var sessionName: String?
+    private var sshKeyStopAccessing: (() -> Void)?  // Release security-scoped resource
 
     // Terminal dimensions
     private var termWidth: Int = 120
@@ -215,7 +216,8 @@ actor PTYService {
         args.append("-tt")
 
         // Resolve SSH key path using security-scoped bookmark if available
-        let (keyPath, _) = server.resolveSSHKeyPath()
+        let (keyPath, stopAccessing) = server.resolveSSHKeyPath()
+        self.sshKeyStopAccessing = stopAccessing
         if let path = keyPath {
             args.append(contentsOf: ["-i", path])
         }
@@ -282,6 +284,9 @@ actor PTYService {
             self.slaveFD = nil
             self.masterHandle = nil
             self.slaveHandle = nil
+            // Release security-scoped resource on error
+            sshKeyStopAccessing?()
+            sshKeyStopAccessing = nil
             throw PTYError.connectionFailed(error.localizedDescription)
         }
     }
@@ -304,6 +309,10 @@ actor PTYService {
         slaveFD = nil
         masterHandle = nil
         slaveHandle = nil
+
+        // Release security-scoped SSH key access
+        sshKeyStopAccessing?()
+        sshKeyStopAccessing = nil
     }
 
     // MARK: - I/O Operations
@@ -454,7 +463,8 @@ actor PTYService {
         var args: [String] = []
 
         // Resolve SSH key path using security-scoped bookmark if available
-        let (keyPath, _) = server.resolveSSHKeyPath()
+        let (keyPath, stopAccessing) = server.resolveSSHKeyPath()
+        defer { stopAccessing() }
         if let path = keyPath {
             args.append(contentsOf: ["-i", path])
         }

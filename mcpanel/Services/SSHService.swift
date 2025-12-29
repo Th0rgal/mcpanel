@@ -49,7 +49,8 @@ actor SSHService {
     // MARK: - Command Execution
 
     func execute(_ command: String, timeout: TimeInterval = 30) async throws -> String {
-        let sshCommand = buildSSHCommand(remoteCommand: command)
+        let (sshCommand, stopAccessing) = buildSSHCommand(remoteCommand: command)
+        defer { stopAccessing() }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
@@ -151,7 +152,7 @@ actor SSHService {
     func stream(_ command: String) -> AsyncStream<String> {
         AsyncStream { continuation in
             Task {
-                let sshCommand = buildSSHCommand(remoteCommand: command)
+                let (sshCommand, stopAccessing) = buildSSHCommand(remoteCommand: command)
 
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
@@ -171,12 +172,14 @@ actor SSHService {
 
                 process.terminationHandler = { _ in
                     outputPipe.fileHandleForReading.readabilityHandler = nil
+                    stopAccessing()  // Release security-scoped resource when process ends
                     continuation.finish()
                 }
 
                 do {
                     try process.run()
                 } catch {
+                    stopAccessing()  // Release on error too
                     continuation.finish()
                 }
             }
@@ -185,11 +188,12 @@ actor SSHService {
 
     // MARK: - Helper Methods
 
-    private func buildSSHCommand(remoteCommand: String) -> [String] {
+    /// Build SSH command arguments and return a closure to release security-scoped resources
+    private func buildSSHCommand(remoteCommand: String) -> (args: [String], stopAccessing: () -> Void) {
         var args: [String] = []
 
         // Resolve SSH key path using security-scoped bookmark if available
-        let (keyPath, _) = server.resolveSSHKeyPath()
+        let (keyPath, stopAccessing) = server.resolveSSHKeyPath()
         if let path = keyPath {
             args.append(contentsOf: ["-i", path])
         }
@@ -221,7 +225,7 @@ actor SSHService {
         // Remote command
         args.append(remoteCommand)
 
-        return args
+        return (args, stopAccessing)
     }
 }
 

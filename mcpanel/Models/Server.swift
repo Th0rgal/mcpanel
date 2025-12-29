@@ -260,6 +260,11 @@ struct Server: Identifiable, Codable, Hashable {
                     relativeTo: nil,
                     bookmarkDataIsStale: &isStale
                 )
+                if isStale {
+                    // Bookmark is stale (file moved/renamed/system updated)
+                    // User will need to re-select SSH key in settings
+                    print("[Server] SSH key bookmark is stale - please re-select your SSH key in server settings")
+                }
                 if url.startAccessingSecurityScopedResource() {
                     return (url.path, { url.stopAccessingSecurityScopedResource() })
                 }
