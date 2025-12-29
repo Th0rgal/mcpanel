@@ -254,6 +254,9 @@ actor PTYService {
         var master: Int32 = 0
         var slave: Int32 = 0
         if openpty(&master, &slave, nil, nil, nil) != 0 {
+            // Release security-scoped resource before throwing
+            sshKeyStopAccessing?()
+            sshKeyStopAccessing = nil
             throw PTYError.connectionFailed("Failed to allocate PTY")
         }
 
