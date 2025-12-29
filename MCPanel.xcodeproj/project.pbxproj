@@ -9,6 +9,8 @@
 /* Begin PBXBuildFile section */
 		02BD68F2DFD8DC00659644A3 /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA235DB2F72F473B056E093 /* SidebarView.swift */; };
 		SSHKP001B98121108B3429D /* SSHKeyPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSHKP002BADA9185D7DD9238 /* SSHKeyPicker.swift */; };
+		UPLMGR01B98121108B3429D /* UploadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = UPLMGR02BADA9185D7DD9238 /* UploadManager.swift */; };
+		UPLBNR01B98121108B3429D /* UploadBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = UPLBNR02BADA9185D7DD9238 /* UploadBanner.swift */; };
 		057CDE99274D2C2021DC3047 /* FileBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFB3F75DB913477CD55D551A /* FileBrowserView.swift */; };
 		0BD349D1CBB25FED6D6AF1E2 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07E23A41816FB78B9F8E32B2 /* OnboardingView.swift */; };
 		14D97865F7D52960502559AE /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC7E4E6E97C4FAAC088AA1BC /* ContentView.swift */; };
@@ -43,6 +45,8 @@
 /* Begin PBXFileReference section */
 		07E23A41816FB78B9F8E32B2 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		SSHKP002BADA9185D7DD9238 /* SSHKeyPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHKeyPicker.swift; sourceTree = "<group>"; };
+		UPLMGR02BADA9185D7DD9238 /* UploadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadManager.swift; sourceTree = "<group>"; };
+		UPLBNR02BADA9185D7DD9238 /* UploadBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadBanner.swift; sourceTree = "<group>"; };
 		095D675237267A09B7AF57D3 /* ConsoleMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConsoleMessage.swift; sourceTree = "<group>"; };
 		0D0BBA060F926AEF7FC80F02 /* PersistenceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceService.swift; sourceTree = "<group>"; };
 		18D7C4F92CD35E4D8F6BA92D /* SSHService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHService.swift; sourceTree = "<group>"; };
@@ -133,6 +137,7 @@
 				859BD2BCEEEECDEF836CAF2E /* PTYService.swift */,
 				504E52689EF3CD22C07E7DAF /* ServerManager.swift */,
 				18D7C4F92CD35E4D8F6BA92D /* SSHService.swift */,
+				UPLMGR02BADA9185D7DD9238 /* UploadManager.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -170,6 +175,7 @@
 				C7BFF4421FDDCD4402B0494B /* CommandInputBar.swift */,
 				77B77641EE98946C58B15329 /* GlassBackground.swift */,
 				SSHKP002BADA9185D7DD9238 /* SSHKeyPicker.swift */,
+				UPLBNR02BADA9185D7DD9238 /* UploadBanner.swift */,
 				C6DA3C390029F86E3057C257 /* WindowStateObserver.swift */,
 			);
 			path = Components;
@@ -254,6 +260,8 @@
 				FAFC51320B98121108B3429D /* ANSIParser.swift in Sources */,
 				1A9EB7193000FD7DD5FEF222 /* CommandDebugPanel.swift in Sources */,
 				A36F052E520F91CC5D487FF6 /* CommandInputBar.swift in Sources */,
+				UPLMGR01B98121108B3429D /* UploadManager.swift in Sources */,
+				UPLBNR01B98121108B3429D /* UploadBanner.swift in Sources */,
 				DD477F7E671A716D53E4848C /* ConsoleMessage.swift in Sources */,
 				92F51E4F48676A850B405269 /* ConsoleView.swift in Sources */,
 				14D97865F7D52960502559AE /* ContentView.swift in Sources */,
