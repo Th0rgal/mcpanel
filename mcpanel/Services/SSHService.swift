@@ -230,22 +230,14 @@ actor SSHService {
         }
 
         // SSH options for non-interactive use
-        // Use ControlMaster to share SSH connections and avoid rate limiting
-        // Use /tmp with a short hash to avoid Unix socket path length limit (~104 chars)
-        // The sandboxed container path is too long, so we use /tmp which is shared
-        let connectionId = "\(server.host)-\(server.sshUsername)-\(server.sshPort)"
-        let hash = connectionId.utf8.reduce(0) { ($0 &<< 5) &- $0 &+ Int($1) }
-        let shortHash = String(format: "%08x", abs(hash))
-        let controlPath = "/tmp/mcp-\(shortHash)"
+        // Note: ControlMaster is disabled because macOS App Sandbox blocks creating
+        // Unix sockets anywhere (both /tmp and container paths are blocked or too long)
         args.append(contentsOf: [
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=10",
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "LogLevel=ERROR",
-            "-o", "ControlMaster=auto",
-            "-o", "ControlPath=\(controlPath)",
-            "-o", "ControlPersist=60"
+            "-o", "LogLevel=ERROR"
         ])
 
         // Port if non-standard
