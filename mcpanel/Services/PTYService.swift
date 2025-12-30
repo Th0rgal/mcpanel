@@ -206,6 +206,9 @@ actor PTYService {
 
     /// Connect to SSH with PTY allocation
     private func connectWithPTY(remoteCommand: String) async throws {
+        let logger = DebugLogger.shared
+        logger.log("connectWithPTY: Starting connection", category: .pty)
+
         // Clean up any existing connection
         disconnect()
 
@@ -253,12 +256,17 @@ actor PTYService {
         // Allocate a local PTY so ssh sees a real TTY (enables proper window sizing + SIGWINCH)
         var master: Int32 = 0
         var slave: Int32 = 0
+        logger.log("connectWithPTY: Allocating PTY...", category: .pty)
         if openpty(&master, &slave, nil, nil, nil) != 0 {
+            // Capture errno immediately before any cleanup that might modify it
+            let errnoVal = errno
             // Release security-scoped resource before throwing
             sshKeyStopAccessing?()
             sshKeyStopAccessing = nil
-            throw PTYError.connectionFailed("Failed to allocate PTY")
+            logger.log("connectWithPTY: openpty failed with errno=\(errnoVal)", category: .pty)
+            throw PTYError.connectionFailed("Failed to allocate PTY (errno=\(errnoVal))")
         }
+        logger.log("connectWithPTY: PTY allocated - master=\(master), slave=\(slave)", category: .pty)
 
         // Apply initial window size before launching ssh so the remote PTY starts correctly sized
         applyWinsize(cols: termWidth, rows: termHeight, to: slave)
@@ -277,12 +285,15 @@ actor PTYService {
         self.slaveHandle = slaveHandle
 
         do {
+            logger.log("connectWithPTY: Launching SSH process...", category: .pty)
             try process.run()
             isConnected = true
+            logger.log("connectWithPTY: SSH process launched, PID=\(process.processIdentifier)", category: .pty)
             // Nudge ssh to propagate our current winsize to the remote
             signalResize()
         } catch {
             // Clean up FDs if launch fails
+            logger.log("connectWithPTY: Process launch failed: \(error)", category: .pty)
             masterHandle.closeFile()
             slaveHandle.closeFile()
             self.masterFD = nil
